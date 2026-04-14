@@ -22,11 +22,12 @@ const app = express();
 // ── CORS ──────────────────────────────────────────────────────
 const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:3000,http://localhost:5173')
   .split(',').map((o) => o.trim());
+const allowAllOrigins = allowedOrigins.includes('*');
 
 app.use(cors({
   origin: (origin, cb) => {
     // Allow requests with no origin (mobile apps, curl, Postman)
-    if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+    if (!origin || allowAllOrigins || allowedOrigins.includes(origin)) return cb(null, true);
     cb(new Error(`CORS: origin "${origin}" not allowed.`));
   },
   credentials: true,
