@@ -15,7 +15,8 @@ const options = {
         'REST API for the Data Labeling Support System. Authenticate via **POST /api/auth/login**, copy the `access_token`, then click **Authorize** and enter `Bearer <token>`.',
     },
     servers: [
-      { url: 'http://localhost:5000', description: 'Local development' },
+      { url: 'https://swp-be-3x8u.onrender.com', description: 'Production (Render)' },
+      { url: 'http://localhost:5000',            description: 'Local development' },
     ],
     components: {
       securitySchemes: {
