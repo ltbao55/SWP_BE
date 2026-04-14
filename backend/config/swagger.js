@@ -159,6 +159,7 @@ const options = {
       { name: 'Reviews',       description: 'Review & approval workflow' },
       { name: 'Activity Logs', description: 'Audit trail (admin only)' },
       { name: 'Settings',      description: 'System settings (admin only)' },
+      { name: 'AI',            description: 'AI-assisted pre-labeling (Google Gemini)' },
       { name: 'Health',        description: 'System health check' },
     ],
   },

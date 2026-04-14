@@ -45,18 +45,16 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 // ── Swagger UI ────────────────────────────────────────────────
-if (process.env.NODE_ENV !== 'production') {
-  app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
-    customSiteTitle: 'Data Labeling API Docs',
-    swaggerOptions: {
-      persistAuthorization: true,   // keep Bearer token across page refreshes
-      filter: true,                 // enable tag/search filtering
-    },
-  }));
-  // Raw OpenAPI JSON spec (useful for code generation)
-  app.get('/api-docs.json', (_req, res) => res.json(swaggerSpec));
-  console.log('   Swagger UI: http://localhost:' + (process.env.PORT || 5000) + '/api-docs');
-}
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+  customSiteTitle: 'Data Labeling API Docs',
+  swaggerOptions: {
+    persistAuthorization: true,   // keep Bearer token across page refreshes
+    filter: true,                 // enable tag/search filtering
+  },
+}));
+// Raw OpenAPI JSON spec (useful for code generation)
+app.get('/api-docs.json', (_req, res) => res.json(swaggerSpec));
+console.log('   Swagger UI: /api-docs');
 
 // ── Routes ────────────────────────────────────────────────────
 app.use('/api/auth',          require('./routes/auth'));
@@ -67,6 +65,7 @@ app.use('/api/tasks',         require('./routes/tasks'));
 app.use('/api/reviews',       require('./routes/reviews'));
 app.use('/api/activity-logs', require('./routes/activityLogs'));
 app.use('/api/settings',      require('./routes/settings'));
+app.use('/api/ai',            require('./routes/ai'));
 
 // ── System Health ─────────────────────────────────────────────
 /**
