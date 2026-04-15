@@ -8,6 +8,7 @@ const { auth, authorize } = require('../middleware/auth');
 const { logActivity }     = require('../utils/activityLogger');
 const { assertTransition, getSubmitStatus } = require('../utils/workflow');
 const { taskAssignValidators, handleValidationErrors } = require('../utils/validators');
+const { groupBboxesByLabel } = require('../utils/annotationUtils');
 
 const router = express.Router();
 
@@ -322,7 +323,14 @@ router.put('/:id/start', auth, authorize('annotator'), async (req, res) => {
  *             properties:
  *               annotation_data:
  *                 type: object
- *                 example: { labels: ["car", "truck"], bboxes: [] }
+ *                 description: >
+ *                   Annotation payload. `bboxes` will be automatically grouped by label
+ *                   and stored in `grouped` field before saving.
+ *                 example:
+ *                   labels: ["cat"]
+ *                   bboxes:
+ *                     - { label: "cat", x: 10, y: 20, width: 50, height: 30 }
+ *                     - { label: "dog", x: 100, y: 120, width: 60, height: 40 }
  *     responses:
  *       200:
  *         description: Progress saved
@@ -338,8 +346,11 @@ router.put('/:id/save', auth, authorize('annotator'), async (req, res) => {
     if (!['in_progress', 'assigned', 'rejected'].includes(task.status))
       return res.status(400).json({ message: `Cannot save a task with status "${task.status}".` });
 
+    // Group bboxes by label before persisting (adds `grouped` field, keeps `bboxes` for COCO export)
+    const processedAnnotation = groupBboxesByLabel(annotation_data);
+
     const { data: updated, error } = await supabaseAdmin.from('tasks')
-      .update({ annotation_data, status: task.status === 'assigned' ? 'in_progress' : task.status })
+      .update({ annotation_data: processedAnnotation, status: task.status === 'assigned' ? 'in_progress' : task.status })
       .eq('id', req.params.id).select('id, status, annotation_data').single();
     if (error) throw error;
     res.json(updated);
@@ -388,9 +399,12 @@ router.post('/:id/submit', auth, authorize('annotator'), async (req, res) => {
     const nextStatus = getSubmitStatus(task.status);
     assertTransition(task.status, nextStatus);
 
-    const finalAnnotation = annotation_data ?? task.annotation_data;
-    if (!finalAnnotation || Object.keys(finalAnnotation).length === 0)
+    const rawAnnotation = annotation_data ?? task.annotation_data;
+    if (!rawAnnotation || Object.keys(rawAnnotation).length === 0)
       return res.status(400).json({ message: 'Cannot submit a task without annotation data.' });
+
+    // Group bboxes by label before final submission (adds `grouped` field, keeps `bboxes` for COCO export)
+    const finalAnnotation = groupBboxesByLabel(rawAnnotation);
 
     const { data: updated, error } = await supabaseAdmin.from('tasks')
       .update({ annotation_data: finalAnnotation, status: nextStatus, submitted_at: new Date().toISOString() })
