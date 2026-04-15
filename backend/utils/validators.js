@@ -47,13 +47,20 @@ const projectValidators = [
   body('review_policy.sample_rate').optional().isFloat({ min: 0.01, max: 1.0 }),
   body('review_policy.reviewers_per_item').optional().isInt({ min: 1, max: 10 }),
   body('export_format').optional().isIn(['YOLO', 'VOC', 'COCO', 'JSON', 'CSV']),
+  body('annotator_ids').optional().isArray().withMessage('annotator_ids must be an array.'),
+  body('annotator_ids.*').optional().isUUID().withMessage('Each annotator_id must be a UUID.'),
+  body('reviewer_ids').optional().isArray().withMessage('reviewer_ids must be an array.'),
+  body('reviewer_ids.*').optional().isUUID().withMessage('Each reviewer_id must be a UUID.'),
 ];
 
 // ── Dataset ───────────────────────────────────────────────────
 const datasetValidators = [
   body('name').trim().isLength({ min: 2, max: 200 }).withMessage('Dataset name must be 2-200 chars.'),
   body('type').isIn(['image', 'text', 'audio', 'video']).withMessage('Type must be image|text|audio|video.'),
-  body('project_id').optional().isUUID().withMessage('project_id must be a valid UUID.'),
+  body('project_id').optional({ nullable: true }).isUUID().withMessage('project_id must be a valid UUID.'),
+  body('topic_id').optional({ nullable: true }).isUUID().withMessage('topic_id must be a valid UUID.'),
+  body('subtopic_ids').optional().isArray().withMessage('subtopic_ids must be an array.'),
+  body('subtopic_ids.*').optional().isUUID().withMessage('Each subtopic_id must be a valid UUID.'),
 ];
 
 // ── Task ──────────────────────────────────────────────────────

@@ -16,7 +16,8 @@ const PROJECT_SELECT = `
   id, name, description, guidelines, status, deadline,
   export_format, review_policy, total_tasks, reviewed_tasks,
   project_review, metadata, created_at, updated_at,
-  manager:profiles!manager_id(id, username, full_name)
+  manager:profiles!manager_id(id, username, full_name),
+  members:project_members(role, user:profiles!user_id(id, username, full_name))
 `;
 
 // ── GET /api/projects ────────────────────────────────────────
@@ -186,6 +187,8 @@ router.post(
         deadline, export_format = 'JSON',
         review_policy = { mode: 'full', sample_rate: 1, reviewers_per_item: 1 },
         metadata = {},
+        annotator_ids = [],
+        reviewer_ids  = [],
       } = req.body;
 
       const { data: project, error } = await supabaseAdmin
@@ -201,6 +204,19 @@ router.post(
         .single();
 
       if (error) throw error;
+
+      // Lưu annotators + reviewers vào project_members
+      const memberRows = [
+        ...[...new Set(annotator_ids)].map((uid) => ({ project_id: project.id, user_id: uid, role: 'annotator' })),
+        ...[...new Set(reviewer_ids)].map((uid)  => ({ project_id: project.id, user_id: uid, role: 'reviewer'  })),
+      ];
+      if (memberRows.length > 0) {
+        const { error: memErr } = await supabaseAdmin.from('project_members').insert(memberRows);
+        if (memErr) {
+          await supabaseAdmin.from('projects').delete().eq('id', project.id); // rollback
+          throw memErr;
+        }
+      }
 
       await logActivity({
         userId: req.user.id, action: 'project_create',

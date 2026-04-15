@@ -1,125 +1,118 @@
+/**
+ * Topic Routes — /api/topics
+ * Taxonomy layer: Topic → Subtopic → Dataset/LabelSet
+ */
+
 const express = require('express');
-const router = express.Router();
-const Topic = require('../models/Topic');
-const Subtopic = require('../models/Subtopic');
-const Dataset = require('../models/Dataset');
-const LabelSet = require('../models/LabelSet');
+const { supabaseAdmin }   = require('../config/supabase');
 const { auth, authorize } = require('../middleware/auth');
-const Project = require('../models/Project');
-const Task = require('../models/Task');
 
-const hasLockedAssignmentForTopic = async (topicId) => {
-  const subtopicIds = await Subtopic.find({ topicId }).distinct('_id');
-  if (!subtopicIds.length) return false;
+const router = express.Router();
 
-  const datasetIds = await Dataset.find({
-    $or: [
-      { subtopicId: { $in: subtopicIds } },
-      { subtopicIds: { $in: subtopicIds } },
-    ],
-  }).distinct('_id');
+// ── GET /api/topics/taxonomy ─────────────────────────────────
+// Trả về toàn bộ Topic + Subtopics lồng bên trong (dùng cho dropdown ở UI).
+router.get('/taxonomy', auth, async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('topics')
+      .select(`
+        id, name, description, color, is_active,
+        subtopics(id, name, description, is_active)
+      `)
+      .eq('is_active', true)
+      .order('name', { ascending: true });
 
-  if (!datasetIds.length) return false;
+    if (error) throw error;
 
-  const assignedTasks = await Task.find({
-    datasetId: { $in: datasetIds },
-    annotatorId: { $ne: null },
-    $or: [
-      { reviewerId: { $ne: null } },
-      { 'reviewers.0': { $exists: true } },
-    ],
-  }).select('projectId').lean();
+    // Filter subtopics to active-only (Supabase không filter được nested)
+    const taxonomy = (data || []).map((t) => ({
+      ...t,
+      subtopics: (t.subtopics || []).filter((s) => s.is_active),
+    }));
 
-  const projectIds = [...new Set(assignedTasks.map(t => t.projectId?.toString()).filter(Boolean))];
-  if (!projectIds.length) return false;
+    res.json(taxonomy);
+  } catch (err) {
+    console.error('[GET /topics/taxonomy]', err);
+    res.status(500).json({ message: 'Failed to load taxonomy.', error: err.message });
+  }
+});
 
-  const lockedProject = await Project.findOne({ _id: { $in: projectIds }, status: { $ne: 'completed' } }).select('_id').lean();
-  return Boolean(lockedProject);
-};
-
+// ── GET /api/topics ──────────────────────────────────────────
 router.get('/', auth, async (req, res) => {
   try {
-    const filter = { status: 'active' };
-    if (req.user.role !== 'admin') filter.managerId = req.user._id;
-    const topics = await Topic.find(filter).sort({ order: 1, createdAt: -1 });
-    const result = await Promise.all(topics.map(async (t) => {
-      const subtopicIds = await Subtopic.find({ topicId: t._id, status: 'active' }).distinct('_id');
-      const subtopics = subtopicIds.length;
-      const datasets = await Dataset.countDocuments({ subtopicId: { $in: subtopicIds } });
-      const labels = await LabelSet.countDocuments({ subtopicId: { $in: subtopicIds } });
-      return { ...t.toObject(), subtopics, datasets, labels };
-    }));
-    res.json(result);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    const { data, error } = await supabaseAdmin
+      .from('topics')
+      .select('id, name, description, color, is_active, created_at')
+      .eq('is_active', true)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to fetch topics.', error: err.message });
+  }
 });
 
+// ── GET /api/topics/:id ─────────────────────────────────────
 router.get('/:id', auth, async (req, res) => {
   try {
-    const topic = await Topic.findById(req.params.id);
-    if (!topic) return res.status(404).json({ error: 'Topic not found' });
-    const subtoptics = await Subtopic.find({ topicId: topic._id, status: 'active' }).sort({ order: 1 });
-    res.json({ topic, subtoptics });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    const { data, error } = await supabaseAdmin
+      .from('topics')
+      .select('*, subtopics(id, name, description, is_active)')
+      .eq('id', req.params.id)
+      .single();
+    if (error || !data) return res.status(404).json({ message: 'Topic not found.' });
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to fetch topic.', error: err.message });
+  }
 });
 
+// ── POST /api/topics ────────────────────────────────────────
 router.post('/', auth, authorize('manager', 'admin'), async (req, res) => {
   try {
-    const { name } = req.body;
-    if (!name || !name.trim()) {
-      return res.status(400).json({ error: 'Tên topic không được để trống' });
-    }
-    // Check for duplicate name under the same manager
-    const existing = await Topic.findOne({
-      name: name.trim(),
-      managerId: req.user._id,
-      status: 'active'
-    });
-    if (existing) {
-      return res.status(400).json({ error: 'Tên topic đã tồn tại. Vui lòng chọn tên khác.' });
-    }
-    const topic = new Topic({ ...req.body, name: name.trim(), managerId: req.user._id });
-    await topic.save();
-    res.status(201).json(topic);
-  } catch (err) { res.status(400).json({ error: err.message }); }
+    const { name, description = '', color = '#3b82f6' } = req.body;
+    if (!name?.trim()) return res.status(400).json({ message: 'Topic name is required.' });
+
+    const { data, error } = await supabaseAdmin
+      .from('topics')
+      .insert({ name: name.trim(), description, color, manager_id: req.user.id })
+      .select()
+      .single();
+    if (error) throw error;
+    res.status(201).json(data);
+  } catch (err) {
+    if (err.code === '23505') return res.status(400).json({ message: 'Topic name already exists.' });
+    res.status(500).json({ message: 'Failed to create topic.', error: err.message });
+  }
 });
 
+// ── PUT /api/topics/:id ─────────────────────────────────────
 router.put('/:id', auth, authorize('manager', 'admin'), async (req, res) => {
   try {
-    const { name } = req.body;
-    if (name && name.trim()) {
-      const existing = await Topic.findOne({
-        name: name.trim(),
-        managerId: req.user._id,
-        status: 'active',
-        _id: { $ne: req.params.id }
-      });
-      if (existing) {
-        return res.status(400).json({ error: 'Tên topic đã tồn tại. Vui lòng chọn tên khác.' });
-      }
-    }
-    const topic = await Topic.findByIdAndUpdate(req.params.id, { ...req.body, name: name ? name.trim() : undefined }, { new: true, runValidators: true });
-    if (!topic) return res.status(404).json({ error: 'Topic not found' });
-    res.json(topic);
-  } catch (err) { res.status(400).json({ error: err.message }); }
+    const allowed = ['name', 'description', 'color', 'is_active'];
+    const updates = {};
+    allowed.forEach((f) => { if (f in req.body) updates[f] = req.body[f]; });
+
+    const { data, error } = await supabaseAdmin
+      .from('topics').update(updates).eq('id', req.params.id).select().single();
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to update topic.', error: err.message });
+  }
 });
 
+// ── DELETE /api/topics/:id ──────────────────────────────────
+// Soft delete: set is_active = false. Cascade tự xoá subtopics/dataset_subtopics nếu hard-delete.
 router.delete('/:id', auth, authorize('manager', 'admin'), async (req, res) => {
   try {
-    const topic = await Topic.findById(req.params.id);
-    if (!topic) return res.status(404).json({ error: 'Topic not found' });
-
-    if (req.user.role === 'manager') {
-      const locked = await hasLockedAssignmentForTopic(topic._id);
-      if (locked) {
-        return res.status(400).json({
-          error: 'Topic da duoc phan cong trong project dang hoat dong. Khong the xoa.',
-        });
-      }
-    }
-
-    const archived = await Topic.findByIdAndUpdate(req.params.id, { status: 'archived' }, { new: true });
-    res.json({ message: 'Topic archived', topic: archived });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    const { error } = await supabaseAdmin
+      .from('topics').update({ is_active: false }).eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ message: 'Topic archived.' });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to archive topic.', error: err.message });
+  }
 });
 
 module.exports = router;

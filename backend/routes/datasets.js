@@ -35,10 +35,18 @@ const upload = multer({
 });
 
 const DATASET_SELECT = `
-  id, name, description, type, status, total_items, storage_path, metadata, created_at, updated_at,
+  id, name, description, type, status, total_items, storage_path, metadata, topic_id, created_at, updated_at,
   manager:profiles!manager_id(id, username, full_name),
-  project:projects!project_id(id, name)
+  project:projects!project_id(id, name),
+  topic:topics!topic_id(id, name, color),
+  subtopics:dataset_subtopics(subtopic:subtopics(id, name, topic_id))
 `;
+
+// Flatten nested dataset_subtopics → array of subtopic objects
+const flattenSubtopics = (row) => {
+  if (!row) return row;
+  return { ...row, subtopics: (row.subtopics || []).map((s) => s.subtopic).filter(Boolean) };
+};
 
 // ── GET /api/datasets ────────────────────────────────────────
 /**
@@ -95,7 +103,7 @@ router.get('/', auth, authorize('manager', 'admin', 'reviewer'), async (req, res
 
     const { data, error, count } = await query;
     if (error) throw error;
-    res.json({ data, total: count, page: Number(page), limit: Number(limit) });
+    res.json({ data: (data || []).map(flattenSubtopics), total: count, page: Number(page), limit: Number(limit) });
   } catch (err) {
     console.error('[GET /datasets]', err);
     res.status(500).json({ message: 'Failed to fetch datasets.', error: err.message });
@@ -133,7 +141,7 @@ router.get('/:id', auth, async (req, res) => {
       .eq('id', req.params.id)
       .single();
     if (error || !dataset) return res.status(404).json({ message: 'Dataset not found.' });
-    res.json(dataset);
+    res.json(flattenSubtopics(dataset));
   } catch (err) {
     console.error('[GET /datasets/:id]', err);
     res.status(500).json({ message: 'Failed to fetch dataset.', error: err.message });
@@ -178,19 +186,55 @@ router.get('/:id', auth, async (req, res) => {
  */
 router.post('/', auth, authorize('manager', 'admin'), datasetValidators, handleValidationErrors, async (req, res) => {
   try {
-    const { name, description = '', type, project_id = null, metadata = {} } = req.body;
+    const {
+      name, description = '', type,
+      project_id = null, metadata = {},
+      topic_id = null,
+      subtopic_ids = [],
+    } = req.body;
 
-    const { data: dataset, error } = await supabaseAdmin
+    // 1) Tạo dataset
+    const { data: dataset, error: insertErr } = await supabaseAdmin
       .from('datasets')
-      .insert({ name, description, type, project_id, manager_id: req.user.id, metadata, status: 'draft' })
-      .select(DATASET_SELECT)
+      .insert({ name, description, type, project_id, manager_id: req.user.id, metadata, status: 'draft', topic_id })
+      .select('id')
       .single();
-    if (error) throw error;
+    if (insertErr) throw insertErr;
+
+    // 2) Chèn các mapping dataset_subtopics (nếu có).
+    //    Supabase JS không có transaction thực sự, nên nếu bước 2 fail → rollback thủ công.
+    if (Array.isArray(subtopic_ids) && subtopic_ids.length > 0) {
+      // Validate: subtopic_ids phải thuộc topic_id đã chọn
+      if (topic_id) {
+        const { data: validSubs } = await supabaseAdmin
+          .from('subtopics').select('id').eq('topic_id', topic_id).in('id', subtopic_ids);
+        const validIds = new Set((validSubs || []).map((s) => s.id));
+        const invalid  = subtopic_ids.filter((id) => !validIds.has(id));
+        if (invalid.length > 0) {
+          await supabaseAdmin.from('datasets').delete().eq('id', dataset.id); // rollback
+          return res.status(400).json({ message: 'Some subtopic_ids do not belong to the given topic.', invalid });
+        }
+      }
+
+      const rows = [...new Set(subtopic_ids)].map((sid) => ({
+        dataset_id:  dataset.id,
+        subtopic_id: sid,
+      }));
+      const { error: linkErr } = await supabaseAdmin.from('dataset_subtopics').insert(rows);
+      if (linkErr) {
+        await supabaseAdmin.from('datasets').delete().eq('id', dataset.id); // rollback
+        throw linkErr;
+      }
+    }
+
+    // 3) Re-select với đầy đủ quan hệ để trả về client
+    const { data: full } = await supabaseAdmin
+      .from('datasets').select(DATASET_SELECT).eq('id', dataset.id).single();
 
     await logActivity({ userId: req.user.id, action: 'dataset_upload', resourceType: 'dataset',
-      resourceId: dataset.id, description: `Dataset "${name}" created`, metadata: { name, type }, req });
+      resourceId: dataset.id, description: `Dataset "${name}" created`, metadata: { name, type, topic_id, subtopic_ids }, req });
 
-    res.status(201).json(dataset);
+    res.status(201).json(flattenSubtopics(full));
   } catch (err) {
     console.error('[POST /datasets]', err);
     res.status(500).json({ message: 'Failed to create dataset.', error: err.message });
