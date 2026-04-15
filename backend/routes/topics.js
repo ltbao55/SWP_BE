@@ -10,8 +10,44 @@ const { auth, authorize } = require('../middleware/auth');
 const router = express.Router();
 
 // ── GET /api/topics/taxonomy ─────────────────────────────────
-// Trả về Topic + nested Subtopics + counts (subtopic_count / asset_count / label_set_count)
-// cho UI "Topic Management" (sidebar số liệu) và dropdown Create Dataset.
+/**
+ * @swagger
+ * /api/topics/taxonomy:
+ *   get:
+ *     summary: Get full taxonomy tree (topics + nested subtopics with counts)
+ *     description: Used by Topic Management UI sidebar and Create Dataset dropdown
+ *     tags: [Topics]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Array of active topics with nested subtopics and stats
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   id:              { type: string, format: uuid }
+ *                   name:            { type: string }
+ *                   description:     { type: string }
+ *                   color:           { type: string }
+ *                   is_active:       { type: boolean }
+ *                   subtopic_count:  { type: integer }
+ *                   asset_count:     { type: integer }
+ *                   label_set_count: { type: integer }
+ *                   subtopics:
+ *                     type: array
+ *                     items:
+ *                       type: object
+ *                       properties:
+ *                         id:              { type: string, format: uuid }
+ *                         name:            { type: string }
+ *                         description:     { type: string }
+ *                         asset_count:     { type: integer }
+ *                         label_set_count: { type: integer }
+ */
 router.get('/taxonomy', auth, async (req, res) => {
   try {
     const { data: topics, error } = await supabaseAdmin
@@ -54,6 +90,31 @@ router.get('/taxonomy', auth, async (req, res) => {
 });
 
 // ── GET /api/topics ──────────────────────────────────────────
+/**
+ * @swagger
+ * /api/topics:
+ *   get:
+ *     summary: List all active topics
+ *     tags: [Topics]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Array of topics
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   id:          { type: string, format: uuid }
+ *                   name:        { type: string }
+ *                   description: { type: string }
+ *                   color:       { type: string }
+ *                   is_active:   { type: boolean }
+ *                   created_at:  { type: string, format: date-time }
+ */
 router.get('/', auth, async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
@@ -69,6 +130,25 @@ router.get('/', auth, async (req, res) => {
 });
 
 // ── GET /api/topics/:id ─────────────────────────────────────
+/**
+ * @swagger
+ * /api/topics/{id}:
+ *   get:
+ *     summary: Get topic details with its subtopics
+ *     tags: [Topics]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Topic with subtopics array
+ *       404:
+ *         description: Topic not found
+ */
 router.get('/:id', auth, async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
@@ -84,6 +164,31 @@ router.get('/:id', auth, async (req, res) => {
 });
 
 // ── POST /api/topics ────────────────────────────────────────
+/**
+ * @swagger
+ * /api/topics:
+ *   post:
+ *     summary: Create a new topic (manager / admin)
+ *     tags: [Topics]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [name]
+ *             properties:
+ *               name:        { type: string, example: "Động vật" }
+ *               description: { type: string }
+ *               color:       { type: string, example: "#3b82f6" }
+ *     responses:
+ *       201:
+ *         description: Topic created
+ *       400:
+ *         description: Name required or already exists
+ */
 router.post('/', auth, authorize('manager', 'admin'), async (req, res) => {
   try {
     const { name, description = '', color = '#3b82f6' } = req.body;
@@ -103,6 +208,33 @@ router.post('/', auth, authorize('manager', 'admin'), async (req, res) => {
 });
 
 // ── PUT /api/topics/:id ─────────────────────────────────────
+/**
+ * @swagger
+ * /api/topics/{id}:
+ *   put:
+ *     summary: Update a topic (manager / admin)
+ *     tags: [Topics]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:        { type: string }
+ *               description: { type: string }
+ *               color:       { type: string }
+ *               is_active:   { type: boolean }
+ *     responses:
+ *       200:
+ *         description: Updated topic
+ */
 router.put('/:id', auth, authorize('manager', 'admin'), async (req, res) => {
   try {
     const allowed = ['name', 'description', 'color', 'is_active'];
@@ -119,6 +251,23 @@ router.put('/:id', auth, authorize('manager', 'admin'), async (req, res) => {
 });
 
 // ── DELETE /api/topics/:id ──────────────────────────────────
+/**
+ * @swagger
+ * /api/topics/{id}:
+ *   delete:
+ *     summary: Archive a topic — soft delete (manager / admin)
+ *     tags: [Topics]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Topic archived (is_active set to false)
+ */
 // Soft delete: set is_active = false. Cascade tự xoá subtopics/dataset_subtopics nếu hard-delete.
 router.delete('/:id', auth, authorize('manager', 'admin'), async (req, res) => {
   try {

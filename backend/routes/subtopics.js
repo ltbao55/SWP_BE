@@ -17,6 +17,40 @@ const upload = multer({
 });
 
 // ── GET /api/subtopics?topic_id=... ──────────────────────────
+/**
+ * @swagger
+ * /api/subtopics:
+ *   get:
+ *     summary: List subtopics (optionally filtered by topic)
+ *     tags: [Subtopics]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: topic_id
+ *         schema: { type: string, format: uuid }
+ *         description: Filter subtopics by parent topic
+ *     responses:
+ *       200:
+ *         description: Array of subtopics
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   id:          { type: string, format: uuid }
+ *                   topic_id:    { type: string, format: uuid }
+ *                   name:        { type: string }
+ *                   description: { type: string }
+ *                   is_active:   { type: boolean }
+ *                   topic:
+ *                     type: object
+ *                     properties:
+ *                       id:   { type: string, format: uuid }
+ *                       name: { type: string }
+ */
 router.get('/', auth, async (req, res) => {
   try {
     let query = supabaseAdmin
@@ -35,6 +69,25 @@ router.get('/', auth, async (req, res) => {
 });
 
 // ── GET /api/subtopics/:id ──────────────────────────────────
+/**
+ * @swagger
+ * /api/subtopics/{id}:
+ *   get:
+ *     summary: Get subtopic details
+ *     tags: [Subtopics]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Subtopic with parent topic info
+ *       404:
+ *         description: Subtopic not found
+ */
 router.get('/:id', auth, async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
@@ -50,6 +103,33 @@ router.get('/:id', auth, async (req, res) => {
 });
 
 // ── POST /api/subtopics ─────────────────────────────────────
+/**
+ * @swagger
+ * /api/subtopics:
+ *   post:
+ *     summary: Create a subtopic under a topic (manager / admin)
+ *     tags: [Subtopics]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [topic_id, name]
+ *             properties:
+ *               topic_id:    { type: string, format: uuid }
+ *               name:        { type: string, example: "Chó, Mèo" }
+ *               description: { type: string }
+ *     responses:
+ *       201:
+ *         description: Subtopic created
+ *       400:
+ *         description: topic_id required, name required, or duplicate
+ *       404:
+ *         description: Topic not found
+ */
 router.post('/', auth, authorize('manager', 'admin'), async (req, res) => {
   try {
     const { topic_id, name, description = '' } = req.body;
@@ -71,6 +151,33 @@ router.post('/', auth, authorize('manager', 'admin'), async (req, res) => {
 });
 
 // ── PUT /api/subtopics/:id ──────────────────────────────────
+/**
+ * @swagger
+ * /api/subtopics/{id}:
+ *   put:
+ *     summary: Update a subtopic (manager / admin)
+ *     tags: [Subtopics]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:        { type: string }
+ *               description: { type: string }
+ *               is_active:   { type: boolean }
+ *               topic_id:    { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Updated subtopic
+ */
 router.put('/:id', auth, authorize('manager', 'admin'), async (req, res) => {
   try {
     const allowed = ['name', 'description', 'is_active', 'topic_id'];
@@ -87,6 +194,23 @@ router.put('/:id', auth, authorize('manager', 'admin'), async (req, res) => {
 });
 
 // ── DELETE /api/subtopics/:id ───────────────────────────────
+/**
+ * @swagger
+ * /api/subtopics/{id}:
+ *   delete:
+ *     summary: Archive a subtopic — soft delete (manager / admin)
+ *     tags: [Subtopics]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Subtopic archived
+ */
 router.delete('/:id', auth, authorize('manager', 'admin'), async (req, res) => {
   try {
     const { error } = await supabaseAdmin
@@ -103,6 +227,38 @@ router.delete('/:id', auth, authorize('manager', 'admin'), async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 
 // GET /api/subtopics/:id/assets
+/**
+ * @swagger
+ * /api/subtopics/{id}/assets:
+ *   get:
+ *     summary: List assets (images/files) in a subtopic's Asset Gallery
+ *     tags: [Subtopics]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Array of data_items owned by this subtopic
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   id:            { type: string, format: uuid }
+ *                   filename:      { type: string }
+ *                   original_name: { type: string }
+ *                   storage_url:   { type: string }
+ *                   mime_type:     { type: string }
+ *                   file_size:     { type: integer }
+ *                   status:        { type: string }
+ *                   created_at:    { type: string, format: date-time }
+ */
 router.get('/:id/assets', auth, async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
@@ -118,6 +274,46 @@ router.get('/:id/assets', auth, async (req, res) => {
 });
 
 // POST /api/subtopics/:id/assets  (multipart, field "files")
+/**
+ * @swagger
+ * /api/subtopics/{id}/assets:
+ *   post:
+ *     summary: Upload assets to a subtopic's Asset Gallery (manager / admin)
+ *     tags: [Subtopics]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               files:
+ *                 type: array
+ *                 items: { type: string, format: binary }
+ *                 description: Max 50 files, 500MB each
+ *     responses:
+ *       201:
+ *         description: Files uploaded
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:  { type: string }
+ *                 uploaded: { type: array, items: { type: object } }
+ *                 errors:   { type: array, items: { type: object } }
+ *       400:
+ *         description: No files provided
+ *       404:
+ *         description: Subtopic not found
+ */
 router.post('/:id/assets', auth, authorize('manager', 'admin'), upload.array('files', 50), async (req, res) => {
   try {
     const { data: subtopic } = await supabaseAdmin
@@ -162,6 +358,31 @@ router.post('/:id/assets', auth, authorize('manager', 'admin'), upload.array('fi
 });
 
 // DELETE /api/subtopics/:id/assets/:itemId
+/**
+ * @swagger
+ * /api/subtopics/{id}/assets/{itemId}:
+ *   delete:
+ *     summary: Delete an asset from a subtopic's Asset Gallery (manager / admin)
+ *     tags: [Subtopics]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *         description: Subtopic ID
+ *       - in: path
+ *         name: itemId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *         description: Data item ID
+ *     responses:
+ *       200:
+ *         description: Asset deleted from storage and database
+ *       404:
+ *         description: Asset not found or does not belong to this subtopic
+ */
 router.delete('/:id/assets/:itemId', auth, authorize('manager', 'admin'), async (req, res) => {
   try {
     const { data: item } = await supabaseAdmin
@@ -182,6 +403,45 @@ router.delete('/:id/assets/:itemId', auth, authorize('manager', 'admin'), async 
 // ═══════════════════════════════════════════════════════════════
 
 // GET /api/subtopics/:id/labelsets
+/**
+ * @swagger
+ * /api/subtopics/{id}/labelsets:
+ *   get:
+ *     summary: List label sets belonging to a subtopic (Label Management panel)
+ *     tags: [Subtopics]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Array of label sets with their labels
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   id:             { type: string, format: uuid }
+ *                   name:           { type: string }
+ *                   description:    { type: string }
+ *                   allow_multiple: { type: boolean }
+ *                   required:       { type: boolean }
+ *                   labels:
+ *                     type: array
+ *                     items:
+ *                       type: object
+ *                       properties:
+ *                         id:         { type: string, format: uuid }
+ *                         name:       { type: string }
+ *                         color:      { type: string }
+ *                         shortcut:   { type: string }
+ *                         sort_order: { type: integer }
+ */
 router.get('/:id/labelsets', auth, async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
@@ -197,6 +457,56 @@ router.get('/:id/labelsets', auth, async (req, res) => {
 });
 
 // POST /api/subtopics/:id/labelsets
+/**
+ * @swagger
+ * /api/subtopics/{id}/labelsets:
+ *   post:
+ *     summary: Create a label set for a subtopic — "Define" button (manager / admin)
+ *     tags: [Subtopics]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [name]
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 example: Animal Classification
+ *               description:
+ *                 type: string
+ *               allow_multiple:
+ *                 type: boolean
+ *                 default: false
+ *               required:
+ *                 type: boolean
+ *                 default: true
+ *               labels:
+ *                 type: array
+ *                 description: Initial labels to create with the set
+ *                 items:
+ *                   type: object
+ *                   required: [name]
+ *                   properties:
+ *                     name:        { type: string, example: "Chó" }
+ *                     color:       { type: string, example: "#ef4444" }
+ *                     description: { type: string }
+ *                     shortcut:    { type: string }
+ *                     sort_order:  { type: integer }
+ *     responses:
+ *       201:
+ *         description: Label set created with labels
+ *       400:
+ *         description: Name required
+ */
 router.post('/:id/labelsets', auth, authorize('manager', 'admin'), async (req, res) => {
   try {
     const { name, description = '', allow_multiple = false, required = true, labels = [] } = req.body;

@@ -162,6 +162,8 @@ const options = {
       { name: 'Settings',      description: 'System settings (admin only)' },
       { name: 'AI',            description: 'AI-assisted pre-labeling (Google Gemini)' },
       { name: 'Health',        description: 'System health check' },
+      { name: 'Topics',        description: 'Taxonomy — top-level topic management' },
+      { name: 'Subtopics',     description: 'Taxonomy — subtopics, asset gallery & label sets' },
     ],
   },
   // Scan all route files for JSDoc @swagger annotations

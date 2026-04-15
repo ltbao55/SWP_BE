@@ -170,7 +170,7 @@ router.get('/:id', auth, async (req, res) => {
  *         application/json:
  *           schema:
  *             type: object
- *             required: [name, type]
+ *             required: [name, type, topic_id]
  *             properties:
  *               name:
  *                 type: string
@@ -180,6 +180,16 @@ router.get('/:id', auth, async (req, res) => {
  *               type:
  *                 type: string
  *                 enum: [image, text, audio, video]
+ *               topic_id:
+ *                 type: string
+ *                 format: uuid
+ *                 description: Required — topic this dataset belongs to
+ *               subtopic_ids:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                   format: uuid
+ *                 description: Subtopics (must belong to topic_id)
  *               project_id:
  *                 type: string
  *                 format: uuid

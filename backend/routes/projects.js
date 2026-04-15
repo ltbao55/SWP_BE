@@ -227,6 +227,19 @@ router.get('/:id', auth, async (req, res) => {
  *               review_policy:
  *                 type: object
  *                 example: { mode: "full", sample_rate: 1, reviewers_per_item: 1 }
+ *               dataset_id:
+ *                 type: string
+ *                 format: uuid
+ *                 nullable: true
+ *                 description: Dataset to auto-distribute tasks from (optional)
+ *               annotator_ids:
+ *                 type: array
+ *                 items: { type: string, format: uuid }
+ *                 description: User IDs with role=annotator to assign to this project
+ *               reviewer_ids:
+ *                 type: array
+ *                 items: { type: string, format: uuid }
+ *                 description: User IDs with role=reviewer to assign to this project
  *     responses:
  *       201:
  *         description: Project created
