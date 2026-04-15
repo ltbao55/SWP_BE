@@ -15,10 +15,68 @@ const router = express.Router();
 const PROJECT_SELECT = `
   id, name, description, guidelines, status, deadline,
   export_format, review_policy, total_tasks, reviewed_tasks,
-  project_review, metadata, created_at, updated_at,
+  project_review, metadata, dataset_id, created_at, updated_at,
   manager:profiles!manager_id(id, username, full_name),
+  dataset:datasets!dataset_id(id, name, topic_id, topic:topics!topic_id(id, name)),
   members:project_members(role, user:profiles!user_id(id, username, full_name))
 `;
+
+/**
+ * Auto-distribute tasks from a Dataset across annotators (round-robin).
+ * Data flow: dataset → dataset_subtopics → data_items (by subtopic_id) → tasks.
+ * Also inserts task_reviewers for each reviewer (multi-reviewer vote model).
+ */
+async function autoDistributeTasks({ project, dataset_id, annotators, reviewers, reviewers_per_item }) {
+  // 1) subtopic_ids linked to this dataset
+  const { data: subLinks } = await supabaseAdmin
+    .from('dataset_subtopics').select('subtopic_id').eq('dataset_id', dataset_id);
+  const subtopicIds = (subLinks || []).map((r) => r.subtopic_id);
+  if (subtopicIds.length === 0) return { created: 0 };
+
+  // 2) all data_items in those subtopics
+  const { data: items } = await supabaseAdmin
+    .from('data_items').select('id').in('subtopic_id', subtopicIds);
+  if (!items || items.length === 0) return { created: 0 };
+
+  // 3) first label_set in those subtopics (UI may later allow picking)
+  const { data: lsRows } = await supabaseAdmin
+    .from('label_sets').select('id').in('subtopic_id', subtopicIds).limit(1);
+  const label_set_id = lsRows?.[0]?.id || null;
+
+  // 4) round-robin assign annotators
+  const taskRows = items.map((it, i) => ({
+    project_id:   project.id,
+    dataset_id,
+    data_item_id: it.id,
+    annotator_id: annotators[i % annotators.length],
+    reviewer_id:  reviewers.length ? reviewers[i % reviewers.length] : null,
+    label_set_id,
+    status:       'assigned',
+  }));
+
+  const { data: insertedTasks, error: tErr } = await supabaseAdmin
+    .from('tasks').insert(taskRows).select('id');
+  if (tErr) throw tErr;
+
+  // 5) task_reviewers for multi-reviewer voting
+  if (reviewers.length > 0 && insertedTasks?.length) {
+    const perItem = Math.min(reviewers_per_item || 1, reviewers.length);
+    const revRows = [];
+    insertedTasks.forEach((t, i) => {
+      for (let k = 0; k < perItem; k++) {
+        revRows.push({ task_id: t.id, reviewer_id: reviewers[(i + k) % reviewers.length], status: 'pending' });
+      }
+    });
+    if (revRows.length > 0) await supabaseAdmin.from('task_reviewers').insert(revRows);
+  }
+
+  // 6) update project counters + status
+  await supabaseAdmin.from('projects')
+    .update({ total_tasks: insertedTasks.length, status: 'active' })
+    .eq('id', project.id);
+
+  return { created: insertedTasks.length };
+}
 
 // ── GET /api/projects ────────────────────────────────────────
 /**
@@ -187,44 +245,62 @@ router.post(
         deadline, export_format = 'JSON',
         review_policy = { mode: 'full', sample_rate: 1, reviewers_per_item: 1 },
         metadata = {},
+        dataset_id    = null,
         annotator_ids = [],
         reviewer_ids  = [],
       } = req.body;
 
+      const annotators = [...new Set(annotator_ids)];
+      const reviewers  = [...new Set(reviewer_ids)];
+
+      // ── STEP 1: insert project ──
       const { data: project, error } = await supabaseAdmin
         .from('projects')
         .insert({
           name, description, guidelines,
           manager_id:    req.user.id,
+          dataset_id,
           deadline:      deadline || null,
           export_format, review_policy, metadata,
           status:        'draft',
         })
         .select(PROJECT_SELECT)
         .single();
-
       if (error) throw error;
 
-      // Lưu annotators + reviewers vào project_members
+      // ── STEP 2: insert project_members ──
       const memberRows = [
-        ...[...new Set(annotator_ids)].map((uid) => ({ project_id: project.id, user_id: uid, role: 'annotator' })),
-        ...[...new Set(reviewer_ids)].map((uid)  => ({ project_id: project.id, user_id: uid, role: 'reviewer'  })),
+        ...annotators.map((uid) => ({ project_id: project.id, user_id: uid, role: 'annotator' })),
+        ...reviewers.map((uid)  => ({ project_id: project.id, user_id: uid, role: 'reviewer'  })),
       ];
       if (memberRows.length > 0) {
         const { error: memErr } = await supabaseAdmin.from('project_members').insert(memberRows);
         if (memErr) {
-          await supabaseAdmin.from('projects').delete().eq('id', project.id); // rollback
+          await supabaseAdmin.from('projects').delete().eq('id', project.id);
           throw memErr;
         }
+      }
+
+      // ── STEP 3: auto-distribute tasks if dataset_id + annotators provided ──
+      let taskStats = { created: 0 };
+      if (dataset_id && annotators.length > 0) {
+        taskStats = await autoDistributeTasks({
+          project,
+          dataset_id,
+          annotators,
+          reviewers,
+          reviewers_per_item: review_policy?.reviewers_per_item || 1,
+        });
       }
 
       await logActivity({
         userId: req.user.id, action: 'project_create',
         resourceType: 'project', resourceId: project.id,
-        description: `Project "${name}" created`, metadata: { name }, req,
+        description: `Project "${name}" created${taskStats.created ? ` (${taskStats.created} tasks auto-generated)` : ''}`,
+        metadata: { name, dataset_id, tasks: taskStats.created }, req,
       });
 
-      res.status(201).json(project);
+      res.status(201).json({ ...project, tasks_created: taskStats.created });
     } catch (err) {
       console.error('[POST /projects]', err);
       res.status(500).json({ message: 'Failed to create project.', error: err.message });

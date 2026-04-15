@@ -10,10 +10,11 @@ const { auth, authorize } = require('../middleware/auth');
 const router = express.Router();
 
 // ── GET /api/topics/taxonomy ─────────────────────────────────
-// Trả về toàn bộ Topic + Subtopics lồng bên trong (dùng cho dropdown ở UI).
+// Trả về Topic + nested Subtopics + counts (subtopic_count / asset_count / label_set_count)
+// cho UI "Topic Management" (sidebar số liệu) và dropdown Create Dataset.
 router.get('/taxonomy', auth, async (req, res) => {
   try {
-    const { data, error } = await supabaseAdmin
+    const { data: topics, error } = await supabaseAdmin
       .from('topics')
       .select(`
         id, name, description, color, is_active,
@@ -21,13 +22,28 @@ router.get('/taxonomy', auth, async (req, res) => {
       `)
       .eq('is_active', true)
       .order('name', { ascending: true });
-
     if (error) throw error;
 
-    // Filter subtopics to active-only (Supabase không filter được nested)
-    const taxonomy = (data || []).map((t) => ({
+    const [{ data: topicStats }, { data: subStats }] = await Promise.all([
+      supabaseAdmin.from('topic_taxonomy_stats').select('*'),
+      supabaseAdmin.from('subtopic_stats').select('*'),
+    ]);
+
+    const topicMap = Object.fromEntries((topicStats || []).map((r) => [r.topic_id, r]));
+    const subMap   = Object.fromEntries((subStats || []).map((r) => [r.subtopic_id, r]));
+
+    const taxonomy = (topics || []).map((t) => ({
       ...t,
-      subtopics: (t.subtopics || []).filter((s) => s.is_active),
+      subtopic_count:  topicMap[t.id]?.subtopic_count  ?? 0,
+      asset_count:     topicMap[t.id]?.asset_count     ?? 0,
+      label_set_count: topicMap[t.id]?.label_set_count ?? 0,
+      subtopics: (t.subtopics || [])
+        .filter((s) => s.is_active)
+        .map((s) => ({
+          ...s,
+          asset_count:     subMap[s.id]?.asset_count     ?? 0,
+          label_set_count: subMap[s.id]?.label_set_count ?? 0,
+        })),
     }));
 
     res.json(taxonomy);

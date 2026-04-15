@@ -47,6 +47,7 @@ const projectValidators = [
   body('review_policy.sample_rate').optional().isFloat({ min: 0.01, max: 1.0 }),
   body('review_policy.reviewers_per_item').optional().isInt({ min: 1, max: 10 }),
   body('export_format').optional().isIn(['YOLO', 'VOC', 'COCO', 'JSON', 'CSV']),
+  body('dataset_id').optional({ nullable: true }).isUUID().withMessage('dataset_id must be a valid UUID.'),
   body('annotator_ids').optional().isArray().withMessage('annotator_ids must be an array.'),
   body('annotator_ids.*').optional().isUUID().withMessage('Each annotator_id must be a UUID.'),
   body('reviewer_ids').optional().isArray().withMessage('reviewer_ids must be an array.'),

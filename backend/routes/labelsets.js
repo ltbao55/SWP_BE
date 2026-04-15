@@ -1,48 +1,71 @@
+/**
+ * Label Set Routes — /api/labelsets
+ * A LabelSet is now owned by a Subtopic. CRUD by id here; listing/creation
+ * scoped to a subtopic lives under /api/subtopics/:id/labelsets.
+ */
+
 const express = require('express');
-const router = express.Router();
-const LabelSet = require('../models/LabelSet');
+const { supabaseAdmin }   = require('../config/supabase');
 const { auth, authorize } = require('../middleware/auth');
 
+const router = express.Router();
+
+const SELECT = `
+  id, name, description, allow_multiple, required, subtopic_id, created_at, updated_at,
+  subtopic:subtopics!subtopic_id(id, name, topic_id),
+  labels(id, name, color, description, shortcut, sort_order)
+`;
+
+// GET /api/labelsets?subtopic_id=...
 router.get('/', auth, async (req, res) => {
   try {
-    const filter = {};
-    if (req.query.subtopicId) filter.subtopicId = req.query.subtopicId;
-    if (req.user.role !== 'admin') filter.managerId = req.user._id;
-    const labelSets = await LabelSet.find(filter).populate('subtopicId', 'name topicId');
-    res.json(labelSets);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    let query = supabaseAdmin.from('label_sets').select(SELECT).order('created_at', { ascending: false });
+    if (req.query.subtopic_id) query = query.eq('subtopic_id', req.query.subtopic_id);
+    const { data, error } = await query;
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to list label sets.', error: err.message });
+  }
 });
 
+// GET /api/labelsets/:id
 router.get('/:id', auth, async (req, res) => {
   try {
-    const labelSet = await LabelSet.findById(req.params.id).populate('subtopicId', 'name topicId');
-    if (!labelSet) return res.status(404).json({ error: 'LabelSet not found' });
-    res.json(labelSet);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    const { data, error } = await supabaseAdmin
+      .from('label_sets').select(SELECT).eq('id', req.params.id).single();
+    if (error || !data) return res.status(404).json({ message: 'Label set not found.' });
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to fetch label set.', error: err.message });
+  }
 });
 
-router.post('/', auth, authorize('manager', 'admin'), async (req, res) => {
-  try {
-    const labelSet = new LabelSet({ ...req.body, managerId: req.user._id });
-    await labelSet.save();
-    res.status(201).json(labelSet);
-  } catch (err) { res.status(400).json({ error: err.message }); }
-});
-
+// PUT /api/labelsets/:id  (name/description/flags only; labels via /labels routes)
 router.put('/:id', auth, authorize('manager', 'admin'), async (req, res) => {
   try {
-    const labelSet = await LabelSet.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
-    if (!labelSet) return res.status(404).json({ error: 'LabelSet not found' });
-    res.json(labelSet);
-  } catch (err) { res.status(400).json({ error: err.message }); }
+    const allowed = ['name', 'description', 'allow_multiple', 'required'];
+    const updates = {};
+    allowed.forEach((f) => { if (f in req.body) updates[f] = req.body[f]; });
+
+    const { data, error } = await supabaseAdmin
+      .from('label_sets').update(updates).eq('id', req.params.id).select(SELECT).single();
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to update label set.', error: err.message });
+  }
 });
 
+// DELETE /api/labelsets/:id
 router.delete('/:id', auth, authorize('manager', 'admin'), async (req, res) => {
   try {
-    const labelSet = await LabelSet.findByIdAndDelete(req.params.id);
-    if (!labelSet) return res.status(404).json({ error: 'LabelSet not found' });
-    res.json({ message: 'LabelSet deleted' });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    const { error } = await supabaseAdmin.from('label_sets').delete().eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ message: 'Label set deleted.' });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to delete label set.', error: err.message });
+  }
 });
 
 module.exports = router;
