@@ -50,4 +50,41 @@ const groupBboxesByLabel = (annotationData) => {
   return { ...annotationData, grouped };
 };
 
-module.exports = { groupBboxesByLabel };
+/**
+ * Format a flat AI prediction array into grouped-by-label structure for FE rendering.
+ *
+ * Input  (raw AI output — flat array):
+ *   [
+ *     { label: "cat", x: 10, y: 20, width: 50, height: 30, confidence: 0.92 },
+ *     { label: "dog", x: 100, y: 120, width: 60, height: 40, confidence: 0.85 },
+ *     { label: "cat", x: 55, y: 65, width: 45, height: 25, confidence: 0.78 }
+ *   ]
+ *
+ * Output (grouped by label — ready for FE bbox renderer):
+ *   {
+ *     "cat": [
+ *       { x: 10, y: 20, width: 50, height: 30, confidence: 0.92 },
+ *       { x: 55, y: 65, width: 45, height: 25, confidence: 0.78 }
+ *     ],
+ *     "dog": [
+ *       { x: 100, y: 120, width: 60, height: 40, confidence: 0.85 }
+ *     ]
+ *   }
+ *
+ * @param {Array} bboxes - Flat array of bbox objects from AI service
+ * @returns {Object} Grouped map { [label]: [coords, ...] }
+ */
+const formatGroupedData = (bboxes) => {
+  if (!Array.isArray(bboxes) || bboxes.length === 0) return {};
+
+  const grouped = {};
+  for (const bbox of bboxes) {
+    const { label, ...coords } = bbox;
+    const key = (typeof label === 'string' && label.trim()) ? label.trim() : '__unlabeled';
+    if (!grouped[key]) grouped[key] = [];
+    grouped[key].push(coords);
+  }
+  return grouped;
+};
+
+module.exports = { groupBboxesByLabel, formatGroupedData };

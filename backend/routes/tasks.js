@@ -8,7 +8,8 @@ const { auth, authorize } = require('../middleware/auth');
 const { logActivity }     = require('../utils/activityLogger');
 const { assertTransition, getSubmitStatus } = require('../utils/workflow');
 const { taskAssignValidators, handleValidationErrors } = require('../utils/validators');
-const { groupBboxesByLabel } = require('../utils/annotationUtils');
+const { groupBboxesByLabel, formatGroupedData } = require('../utils/annotationUtils');
+const { getAIPredictions } = require('../services/aiService');
 
 const router = express.Router();
 
@@ -419,6 +420,142 @@ router.post('/:id/submit', auth, authorize('annotator'), async (req, res) => {
     if (err.message.startsWith('Invalid status transition')) return res.status(400).json({ message: err.message });
     console.error('[POST /tasks/:id/submit]', err);
     res.status(500).json({ message: 'Failed to submit task.', error: err.message });
+  }
+});
+
+// POST /api/tasks/:id/ai-assist
+/**
+ * @swagger
+ * /api/tasks/{id}/ai-assist:
+ *   post:
+ *     summary: Trigger AI to generate draft bounding boxes for an image (annotator button)
+ *     description: |
+ *       Human-in-the-loop flow:
+ *       1. Annotator clicks "AI Assist" button on the labeling UI
+ *       2. FE calls this endpoint
+ *       3. Backend fetches the task image from Supabase Storage
+ *       4. Sends image to AI model (Gemini / Mock) for bbox detection
+ *       5. Returns grouped bboxes — FE renders them as draggable draft boxes
+ *       6. Annotator adjusts → calls PUT /:id/save to persist final result
+ *
+ *       Note: this endpoint does NOT save anything to DB.
+ *       It only returns suggestions for the annotator to review.
+ *     tags: [Tasks]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               image_width:
+ *                 type: integer
+ *                 default: 1000
+ *                 description: Canvas width in pixels (for coordinate scaling)
+ *               image_height:
+ *                 type: integer
+ *                 default: 1000
+ *                 description: Canvas height in pixels (for coordinate scaling)
+ *     responses:
+ *       200:
+ *         description: AI draft bboxes grouped by label — ready for FE renderer
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 task_id:   { type: string, format: uuid }
+ *                 mode:      { type: string, enum: [mock, gemini], example: gemini }
+ *                 bboxes:
+ *                   type: array
+ *                   description: Flat list of predicted boxes
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       label:      { type: string }
+ *                       x:          { type: integer }
+ *                       y:          { type: integer }
+ *                       width:      { type: integer }
+ *                       height:     { type: integer }
+ *                       confidence: { type: number, format: float }
+ *                 grouped:
+ *                   type: object
+ *                   description: Same bboxes grouped by label for FE rendering
+ *                   example:
+ *                     cat: [{ x: 10, y: 20, width: 50, height: 30, confidence: 0.92 }]
+ *                     dog: [{ x: 100, y: 120, width: 60, height: 40, confidence: 0.85 }]
+ *       400:
+ *         description: Task is not an image or has no label set
+ *       403:
+ *         description: Task not assigned to you
+ *       404:
+ *         description: Task not found
+ */
+router.post('/:id/ai-assist', auth, authorize('annotator'), async (req, res) => {
+  try {
+    const { image_width = 1000, image_height = 1000 } = req.body;
+
+    // ── STEP 1: Load task with image + label set ──────────────
+    const { data: task, error } = await supabaseAdmin
+      .from('tasks')
+      .select(`
+        id, status, annotator_id,
+        data_item:data_items!data_item_id(id, storage_path, storage_url, mime_type),
+        label_set:label_sets!label_set_id(id, name, labels(id, name, description))
+      `)
+      .eq('id', req.params.id)
+      .single();
+
+    if (error || !task) return res.status(404).json({ message: 'Task not found.' });
+    if (task.annotator_id !== req.user.id)
+      return res.status(403).json({ message: 'This task is not assigned to you.' });
+
+    // ── STEP 2: Validate image task ───────────────────────────
+    const mime = task.data_item?.mime_type || '';
+    if (!mime.startsWith('image/')) {
+      return res.status(400).json({ message: `AI Assist only supports image tasks. Got: ${mime}` });
+    }
+    if (!task.label_set?.labels?.length) {
+      return res.status(400).json({ message: 'Task has no label set — cannot determine what to detect.' });
+    }
+
+    // ── STEP 3: Get image URL (prefer signed URL for private storage) ──
+    let imageUrl = task.data_item.storage_url;
+    if (task.data_item.storage_path) {
+      const { data: signed } = await supabaseAdmin.storage
+        .from(process.env.STORAGE_BUCKET || 'datasets')
+        .createSignedUrl(task.data_item.storage_path, 600); // 10 min validity
+      if (signed?.signedUrl) imageUrl = signed.signedUrl;
+    }
+    if (!imageUrl) return res.status(400).json({ message: 'Image URL is not available.' });
+
+    // ── STEP 4: Call AI service (Mock or Gemini) ──────────────
+    const rawBboxes = await getAIPredictions({
+      imageUrl,
+      labels:    task.label_set.labels,
+      imageSize: { width: image_width, height: image_height },
+    });
+
+    // ── STEP 5: Format output — flat array + grouped map ──────
+    // grouped goes to FE bbox renderer; bboxes[] stays for annotator to
+    // pass back via PUT /:id/save when they're done adjusting
+    const grouped = formatGroupedData(rawBboxes);
+
+    res.json({
+      task_id: task.id,
+      mode:    process.env.AI_BBOX_MODE || 'gemini',
+      bboxes:  rawBboxes,  // flat — FE populates the canvas with these
+      grouped,             // grouped — FE can also use this for label-aware rendering
+    });
+  } catch (err) {
+    console.error('[POST /tasks/:id/ai-assist]', err);
+    res.status(500).json({ message: 'AI Assist failed.', error: err.message });
   }
 });
 
