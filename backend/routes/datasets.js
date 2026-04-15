@@ -42,10 +42,17 @@ const DATASET_SELECT = `
   subtopics:dataset_subtopics(subtopic:subtopics(id, name, topic_id))
 `;
 
-// Flatten nested dataset_subtopics → array of subtopic objects
-const flattenSubtopics = (row) => {
+// Flatten nested joins → expose topic_name + subtopics[] at the top level.
+// Shape returned to FE:
+//   { ...dataset, topic: {...}, topic_name, subtopics: [{id,name,topic_id}, ...] }
+const shapeDataset = (row) => {
   if (!row) return row;
-  return { ...row, subtopics: (row.subtopics || []).map((s) => s.subtopic).filter(Boolean) };
+  const subtopics = (row.subtopics || []).map((s) => s.subtopic).filter(Boolean);
+  return {
+    ...row,
+    subtopics,
+    topic_name: row.topic?.name || null,
+  };
 };
 
 // ── GET /api/datasets ────────────────────────────────────────
@@ -103,7 +110,7 @@ router.get('/', auth, authorize('manager', 'admin', 'reviewer'), async (req, res
 
     const { data, error, count } = await query;
     if (error) throw error;
-    res.json({ data: (data || []).map(flattenSubtopics), total: count, page: Number(page), limit: Number(limit) });
+    res.json({ data: (data || []).map(shapeDataset), total: count, page: Number(page), limit: Number(limit) });
   } catch (err) {
     console.error('[GET /datasets]', err);
     res.status(500).json({ message: 'Failed to fetch datasets.', error: err.message });
@@ -141,7 +148,7 @@ router.get('/:id', auth, async (req, res) => {
       .eq('id', req.params.id)
       .single();
     if (error || !dataset) return res.status(404).json({ message: 'Dataset not found.' });
-    res.json(flattenSubtopics(dataset));
+    res.json(shapeDataset(dataset));
   } catch (err) {
     console.error('[GET /datasets/:id]', err);
     res.status(500).json({ message: 'Failed to fetch dataset.', error: err.message });
@@ -185,59 +192,94 @@ router.get('/:id', auth, async (req, res) => {
  *             schema: { $ref: '#/components/schemas/Dataset' }
  */
 router.post('/', auth, authorize('manager', 'admin'), datasetValidators, handleValidationErrors, async (req, res) => {
+  // Body: { name, description, type, topic_id (required), subtopic_ids: UUID[] }
+  const {
+    name, description = '', type,
+    topic_id,
+    subtopic_ids = [],
+    project_id = null, metadata = {},
+  } = req.body;
+
+  // ── Guard: topic_id is REQUIRED (khớp với UI Create Dataset) ──
+  if (!topic_id) {
+    return res.status(400).json({ message: 'topic_id is required.' });
+  }
+
+  // Dedupe subtopic_ids
+  const subIds = [...new Set(Array.isArray(subtopic_ids) ? subtopic_ids : [])];
+
+  let createdDatasetId = null;
   try {
-    const {
-      name, description = '', type,
-      project_id = null, metadata = {},
-      topic_id = null,
-      subtopic_ids = [],
-    } = req.body;
+    // ── STEP 1: verify topic + subtopics trước khi ghi gì vào DB ──
+    const { data: topic, error: topicErr } = await supabaseAdmin
+      .from('topics').select('id, name').eq('id', topic_id).single();
+    if (topicErr || !topic) {
+      return res.status(400).json({ message: 'Topic not found.' });
+    }
 
-    // 1) Tạo dataset
-    const { data: dataset, error: insertErr } = await supabaseAdmin
-      .from('datasets')
-      .insert({ name, description, type, project_id, manager_id: req.user.id, metadata, status: 'draft', topic_id })
-      .select('id')
-      .single();
-    if (insertErr) throw insertErr;
-
-    // 2) Chèn các mapping dataset_subtopics (nếu có).
-    //    Supabase JS không có transaction thực sự, nên nếu bước 2 fail → rollback thủ công.
-    if (Array.isArray(subtopic_ids) && subtopic_ids.length > 0) {
-      // Validate: subtopic_ids phải thuộc topic_id đã chọn
-      if (topic_id) {
-        const { data: validSubs } = await supabaseAdmin
-          .from('subtopics').select('id').eq('topic_id', topic_id).in('id', subtopic_ids);
-        const validIds = new Set((validSubs || []).map((s) => s.id));
-        const invalid  = subtopic_ids.filter((id) => !validIds.has(id));
-        if (invalid.length > 0) {
-          await supabaseAdmin.from('datasets').delete().eq('id', dataset.id); // rollback
-          return res.status(400).json({ message: 'Some subtopic_ids do not belong to the given topic.', invalid });
-        }
-      }
-
-      const rows = [...new Set(subtopic_ids)].map((sid) => ({
-        dataset_id:  dataset.id,
-        subtopic_id: sid,
-      }));
-      const { error: linkErr } = await supabaseAdmin.from('dataset_subtopics').insert(rows);
-      if (linkErr) {
-        await supabaseAdmin.from('datasets').delete().eq('id', dataset.id); // rollback
-        throw linkErr;
+    if (subIds.length > 0) {
+      const { data: validSubs } = await supabaseAdmin
+        .from('subtopics').select('id').eq('topic_id', topic_id).in('id', subIds);
+      const validSet = new Set((validSubs || []).map((s) => s.id));
+      const invalid  = subIds.filter((id) => !validSet.has(id));
+      if (invalid.length > 0) {
+        return res.status(400).json({
+          message: 'Some subtopic_ids do not belong to the given topic.',
+          invalid,
+        });
       }
     }
 
-    // 3) Re-select với đầy đủ quan hệ để trả về client
-    const { data: full } = await supabaseAdmin
-      .from('datasets').select(DATASET_SELECT).eq('id', dataset.id).single();
+    // ── STEP 2: INSERT dataset (thông tin chung + topic_id) ──
+    const { data: dataset, error: insertErr } = await supabaseAdmin
+      .from('datasets')
+      .insert({
+        name,
+        description,
+        type,
+        topic_id,
+        project_id,
+        manager_id: req.user.id,
+        metadata,
+        status: 'draft',
+      })
+      .select('id')
+      .single();
+    if (insertErr) throw insertErr;
+    createdDatasetId = dataset.id;
 
-    await logActivity({ userId: req.user.id, action: 'dataset_upload', resourceType: 'dataset',
-      resourceId: dataset.id, description: `Dataset "${name}" created`, metadata: { name, type, topic_id, subtopic_ids }, req });
+    // ── STEP 3: BULK INSERT dataset_subtopics (M–N junction) ──
+    // Với mỗi subtopic_id → 1 row {dataset_id, subtopic_id}.
+    // Nếu fail → DELETE dataset vừa tạo để rollback (Supabase JS không có TX thật).
+    if (subIds.length > 0) {
+      const rows = subIds.map((sid) => ({ dataset_id: createdDatasetId, subtopic_id: sid }));
+      const { error: linkErr } = await supabaseAdmin.from('dataset_subtopics').insert(rows);
+      if (linkErr) throw linkErr;
+    }
 
-    res.status(201).json(flattenSubtopics(full));
+    // ── STEP 4: RE-SELECT full dataset với topic + subtopics để trả FE ──
+    const { data: full, error: selErr } = await supabaseAdmin
+      .from('datasets')
+      .select(DATASET_SELECT)
+      .eq('id', createdDatasetId)
+      .single();
+    if (selErr) throw selErr;
+
+    await logActivity({
+      userId: req.user.id, action: 'dataset_upload', resourceType: 'dataset',
+      resourceId: createdDatasetId,
+      description: `Dataset "${name}" created under topic "${topic.name}"`,
+      metadata: { name, type, topic_id, subtopic_ids: subIds }, req,
+    });
+
+    return res.status(201).json(shapeDataset(full));
   } catch (err) {
+    // Manual rollback: xoá dataset nếu đã tạo nhưng step sau fail
+    if (createdDatasetId) {
+      await supabaseAdmin.from('datasets').delete().eq('id', createdDatasetId);
+    }
     console.error('[POST /datasets]', err);
-    res.status(500).json({ message: 'Failed to create dataset.', error: err.message });
+    return res.status(500).json({ message: 'Failed to create dataset.', error: err.message });
   }
 });
 

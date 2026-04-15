@@ -58,7 +58,7 @@ const datasetValidators = [
   body('name').trim().isLength({ min: 2, max: 200 }).withMessage('Dataset name must be 2-200 chars.'),
   body('type').isIn(['image', 'text', 'audio', 'video']).withMessage('Type must be image|text|audio|video.'),
   body('project_id').optional({ nullable: true }).isUUID().withMessage('project_id must be a valid UUID.'),
-  body('topic_id').optional({ nullable: true }).isUUID().withMessage('topic_id must be a valid UUID.'),
+  body('topic_id').isUUID().withMessage('topic_id is required and must be a valid UUID.'),
   body('subtopic_ids').optional().isArray().withMessage('subtopic_ids must be an array.'),
   body('subtopic_ids.*').optional().isUUID().withMessage('Each subtopic_id must be a valid UUID.'),
 ];
