@@ -263,11 +263,23 @@ router.get('/:id/assets', auth, async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
       .from('data_items')
-      .select('id, filename, original_name, storage_path, storage_url, mime_type, file_size, status, created_at')
+      .select('id, filename, original_name, storage_path, storage_url, mime_type, file_size, status, ai_status, created_at')
       .eq('subtopic_id', req.params.id)
       .order('created_at', { ascending: false });
     if (error) throw error;
-    res.json(data);
+
+    // Tạo signed URL (10 phút) cho từng ảnh — bucket là private
+    const withUrls = await Promise.all(
+      (data || []).map(async (item) => {
+        if (!item.storage_path) return item;
+        const { data: signed } = await supabaseAdmin.storage
+          .from(BUCKET)
+          .createSignedUrl(item.storage_path, 600); // 10 phút
+        return { ...item, signed_url: signed?.signedUrl || item.storage_url };
+      })
+    );
+
+    res.json(withUrls);
   } catch (err) {
     res.status(500).json({ message: 'Failed to list assets.', error: err.message });
   }
@@ -327,33 +339,75 @@ router.post('/:id/assets', auth, authorize('manager', 'admin'), upload.array('fi
     const errors   = [];
 
     for (const file of files) {
-      const filename    = `${Date.now()}_${file.originalname}`;
+      const filename    = `${Date.now()}_${file.originalname.replace(/\s+/g, '_')}`;
       const storagePath = `subtopics/${subtopic.id}/${filename}`;
 
+      // STEP 1: Upload file lên Storage
       const { error: upErr } = await supabaseAdmin.storage
         .from(BUCKET).upload(storagePath, file.buffer, { contentType: file.mimetype, upsert: true });
       if (upErr) { errors.push({ filename: file.originalname, error: upErr.message }); continue; }
 
-      const { data: urlData } = supabaseAdmin.storage.from(BUCKET).getPublicUrl(storagePath);
+      // STEP 2: Lưu metadata vào DB
       const { data: item, error: iErr } = await supabaseAdmin.from('data_items').insert({
         subtopic_id:   subtopic.id,
         filename,
         original_name: file.originalname,
         storage_path:  storagePath,
-        storage_url:   urlData.publicUrl,
+        storage_url:   null, // dùng signed URL — không lưu public URL
         mime_type:     file.mimetype,
         file_size:     file.size,
         status:        'pending',
-      }).select('id, filename, storage_url, mime_type, file_size').single();
+      }).select('id, filename, mime_type, file_size, storage_path').single();
 
-      if (iErr) errors.push({ filename: file.originalname, error: iErr.message });
-      else uploaded.push(item);
+      if (iErr) {
+        // Compensating transaction: xóa file vừa upload để tránh file rác
+        await supabaseAdmin.storage.from(BUCKET).remove([storagePath]);
+        errors.push({ filename: file.originalname, error: iErr.message });
+        continue;
+      }
+
+      // STEP 3: Tạo signed URL để FE hiển thị ngay
+      const { data: signed } = await supabaseAdmin.storage
+        .from(BUCKET).createSignedUrl(storagePath, 600); // 10 phút
+
+      uploaded.push({ ...item, signed_url: signed?.signedUrl });
     }
 
     res.status(201).json({ message: `Uploaded ${uploaded.length} file(s).`, uploaded, errors });
   } catch (err) {
     console.error('[POST /subtopics/:id/assets]', err);
     res.status(500).json({ message: 'Upload failed.', error: err.message });
+  }
+});
+
+// GET /api/subtopics/:id/assets/:itemId/signed-url
+/**
+ * @swagger
+ * /api/subtopics/{id}/assets/{itemId}/signed-url:
+ *   get:
+ *     summary: Lấy signed URL (10 phút) để hiển thị ảnh từ private bucket
+ *     tags: [Subtopics]
+ *     security:
+ *       - bearerAuth: []
+ */
+router.get('/:id/assets/:itemId/signed-url', auth, async (req, res) => {
+  try {
+    const { data: item } = await supabaseAdmin
+      .from('data_items')
+      .select('id, storage_path, subtopic_id')
+      .eq('id', req.params.itemId)
+      .single();
+
+    if (!item || item.subtopic_id !== req.params.id)
+      return res.status(404).json({ message: 'Asset not found.' });
+
+    const { data: signed, error } = await supabaseAdmin.storage
+      .from(BUCKET).createSignedUrl(item.storage_path, 600);
+    if (error) throw error;
+
+    res.json({ signed_url: signed.signedUrl, expires_in: 600 });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to create signed URL.', error: err.message });
   }
 });
 
