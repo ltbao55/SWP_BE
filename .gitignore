@@ -1,0 +1,30 @@
+# Environment variables — NEVER commit real credentials
+backend/.env
+backend/.env.local
+backend/.env.*.local
+
+# Dependencies
+backend/node_modules/
+node_modules/
+
+# Uploads (local file storage)
+backend/uploads/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/settings.json
+
+# Claude Code memory (local only)
+.claude/
+
+# Build output
+dist/
+build/
