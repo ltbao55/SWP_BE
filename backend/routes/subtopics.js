@@ -345,12 +345,7 @@ router.post('/:id/assets', auth, authorize('manager', 'admin'), upload.array('fi
       // STEP 1: Upload file lên Storage
       const { error: upErr } = await supabaseAdmin.storage
         .from(BUCKET).upload(storagePath, file.buffer, { contentType: file.mimetype, upsert: true });
-      if (upErr) {
-        console.error('[ASSET UPLOAD] ❌ STEP 1 STORAGE FAILED:', upErr);
-        errors.push({ filename: file.originalname, error: `[Storage] ${upErr.message}` });
-        continue;
-      }
-      console.log('[ASSET UPLOAD] ✅ STEP 1 Storage OK:', storagePath);
+      if (upErr) { errors.push({ filename: file.originalname, error: upErr.message }); continue; }
 
       // STEP 2: Lưu metadata vào DB
       const { data: item, error: iErr } = await supabaseAdmin.from('data_items').insert({
@@ -358,23 +353,22 @@ router.post('/:id/assets', auth, authorize('manager', 'admin'), upload.array('fi
         filename,
         original_name: file.originalname,
         storage_path:  storagePath,
-        storage_url:   null,
+        storage_url:   null, // dùng signed URL — không lưu public URL
         mime_type:     file.mimetype,
         file_size:     file.size,
         status:        'pending',
       }).select('id, filename, mime_type, file_size, storage_path').single();
 
       if (iErr) {
-        console.error('[ASSET UPLOAD] ❌ STEP 2 DB FAILED:', iErr);
+        // Compensating transaction: xóa file vừa upload để tránh file rác
         await supabaseAdmin.storage.from(BUCKET).remove([storagePath]);
-        errors.push({ filename: file.originalname, error: `[DB] ${iErr.message}` });
+        errors.push({ filename: file.originalname, error: iErr.message });
         continue;
       }
-      console.log('[ASSET UPLOAD] ✅ STEP 2 DB OK, item id:', item.id);
 
       // STEP 3: Tạo signed URL để FE hiển thị ngay
       const { data: signed } = await supabaseAdmin.storage
-        .from(BUCKET).createSignedUrl(storagePath, 600);
+        .from(BUCKET).createSignedUrl(storagePath, 600); // 10 phút
 
       uploaded.push({ ...item, signed_url: signed?.signedUrl });
     }

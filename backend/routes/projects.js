@@ -17,9 +17,32 @@ const PROJECT_SELECT = `
   export_format, review_policy, total_tasks, reviewed_tasks,
   project_review, metadata, dataset_id, created_at, updated_at,
   manager:profiles!manager_id(id, username, full_name),
-  dataset:datasets!dataset_id(id, name, topic_id, topic:topics!topic_id(id, name)),
+  dataset:datasets!dataset_id(
+    id, name, topic_id,
+    topic:topics!topic_id(id, name),
+    subtopics:dataset_subtopics(subtopic:subtopics(id, name))
+  ),
   members:project_members(role, user:profiles!user_id(id, username, full_name))
 `;
+
+/**
+ * Flatten Supabase nested join shape for dataset.subtopics.
+ * Raw:  dataset.subtopics = [{ subtopic: { id, name } }, ...]
+ * Out:  dataset.subtopics = [{ id, name }, ...]
+ */
+const shapeProject = (project) => {
+  if (!project || !project.dataset) return project;
+  const subtopics = (project.dataset.subtopics || [])
+    .map((s) => s.subtopic)
+    .filter(Boolean);
+  return {
+    ...project,
+    dataset: {
+      ...project.dataset,
+      subtopics,
+    },
+  };
+};
 
 /**
  * Auto-distribute tasks from a Dataset across annotators (round-robin).
@@ -141,7 +164,7 @@ router.get('/', auth, async (req, res) => {
     const { data, error, count } = await query;
     if (error) throw error;
 
-    res.json({ data, total: count, page: Number(page), limit: Number(limit) });
+    res.json({ data: (data || []).map(shapeProject), total: count, page: Number(page), limit: Number(limit) });
   } catch (err) {
     console.error('[GET /projects]', err);
     res.status(500).json({ message: 'Failed to fetch projects.', error: err.message });
@@ -192,7 +215,7 @@ router.get('/:id', auth, async (req, res) => {
       .eq('project_id', req.params.id)
       .maybeSingle();
 
-    res.json({ ...project, stats: stats || null });
+    res.json(shapeProject({ ...project, stats: stats || null }));
   } catch (err) {
     console.error('[GET /projects/:id]', err);
     res.status(500).json({ message: 'Failed to fetch project.', error: err.message });
@@ -313,7 +336,7 @@ router.post(
         metadata: { name, dataset_id, tasks: taskStats.created }, req,
       });
 
-      res.status(201).json({ ...project, tasks_created: taskStats.created });
+      res.status(201).json(shapeProject({ ...project, tasks_created: taskStats.created }));
     } catch (err) {
       console.error('[POST /projects]', err);
       res.status(500).json({ message: 'Failed to create project.', error: err.message });
@@ -375,7 +398,7 @@ router.put(
           return res.status(403).json({ message: 'You can only edit your own projects.' });
       }
 
-      const allowedFields = ['name','description','guidelines','deadline','export_format','review_policy','status','metadata'];
+      const allowedFields = ['name','description','guidelines','deadline','export_format','review_policy','status','metadata','dataset_id'];
       const updates = {};
       allowedFields.forEach((f) => { if (f in req.body) updates[f] = req.body[f]; });
 
@@ -395,7 +418,7 @@ router.put(
         metadata: { fields: Object.keys(updates) }, req,
       });
 
-      res.json(project);
+      res.json(shapeProject(project));
     } catch (err) {
       console.error('[PUT /projects/:id]', err);
       res.status(500).json({ message: 'Failed to update project.', error: err.message });

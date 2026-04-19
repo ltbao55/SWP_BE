@@ -490,9 +490,9 @@ router.post('/:id/reject', auth, authorize('reviewer', 'admin'), rejectValidator
 router.get('/projects/:projectId/stats', auth, authorize('reviewer', 'manager', 'admin'), async (req, res) => {
   try {
     const { data: stats, error } = await supabaseAdmin
-      .from('project_task_stats').select('*').eq('project_id', req.params.projectId).single();
+      .from('project_task_stats').select('*').eq('project_id', req.params.projectId).maybeSingle();
     if (error) throw error;
-    res.json(stats);
+    res.json(stats || { project_id: req.params.projectId, total_tasks: 0, approved_tasks: 0, rejected_tasks: 0, approval_rate: 0 });
   } catch (err) {
     console.error('[GET /reviews/projects/:projectId/stats]', err);
     res.status(500).json({ message: 'Failed to fetch project stats.', error: err.message });

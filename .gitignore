@@ -24,6 +24,8 @@ Thumbs.db
 
 # Claude Code memory (local only)
 .claude/
+backend/CLAUDE.md
+CLAUDE.md
 
 # Build output
 dist/

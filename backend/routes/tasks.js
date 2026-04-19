@@ -16,9 +16,9 @@ const router = express.Router();
 const TASK_SELECT = `
   id, status, annotation_data, review_comments, error_category,
   review_notes, review_issues, submitted_at, reviewed_at, created_at, updated_at,
-  project:projects!project_id(id, name, guidelines, deadline, review_policy),
+  project:projects!project_id(id, name, guidelines, deadline, review_policy, dataset_id),
   dataset:datasets!dataset_id(id, name),
-  data_item:data_items!data_item_id(id, filename, original_name, storage_path, storage_url, mime_type),
+  data_item:data_items!data_item_id(id, filename, original_name, storage_path, storage_url, mime_type, dataset_id),
   annotator:profiles!annotator_id(id, username, full_name),
   reviewer:profiles!reviewer_id(id, username, full_name),
   label_set:label_sets!label_set_id(id, name, labels(*))
