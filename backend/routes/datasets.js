@@ -181,13 +181,48 @@ router.get('/:id/approved-results', auth, authorize('manager', 'admin', 'reviewe
         id, status, annotation_data,
         reviewer:profiles!reviewer_id(id, full_name, username),
         annotator:profiles!annotator_id(id, full_name, username),
-        data_item:data_items!data_item_id(id, storage_url, filename)
+        data_item:data_items!data_item_id(id, storage_url, storage_path, filename)
       `)
       .eq('dataset_id', req.params.id)
       .eq('status', 'approved');
 
     if (error) throw error;
-    res.json(data || []);
+
+    let enrichedData = data || [];
+    try {
+      const BUCKET = process.env.STORAGE_BUCKET || 'datasets';
+      const paths = enrichedData.map(d => d.data_item?.storage_path).filter(Boolean);
+      const uniquePaths = [...new Set(paths)];
+      
+      let signedUrlsMap = {};
+      if (uniquePaths.length > 0) {
+        const { data: signedPaths } = await supabaseAdmin.storage
+          .from(BUCKET)
+          .createSignedUrls(uniquePaths, 3600);
+          
+        if (signedPaths) {
+          signedPaths.forEach(sp => {
+            if (!sp.error && sp.signedUrl) signedUrlsMap[sp.path] = sp.signedUrl;
+          });
+        }
+      }
+      
+      enrichedData = enrichedData.map(task => {
+        let finalUrl = task.data_item?.storage_url;
+        const sPath = task.data_item?.storage_path;
+        if (sPath && signedUrlsMap[sPath]) {
+          finalUrl = signedUrlsMap[sPath];
+        }
+        return {
+          ...task,
+          data_item: task.data_item ? { ...task.data_item, storage_url: finalUrl } : null
+        };
+      });
+    } catch (e) {
+       console.error('[GET /datasets/:id/approved-results] signed URL error:', e.message);
+    }
+
+    res.json(enrichedData);
   } catch (err) {
     console.error('[GET /datasets/:id/approved-results]', err);
     res.status(500).json({ message: 'Failed to fetch approved results.', error: err.message });
