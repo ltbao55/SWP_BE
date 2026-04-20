@@ -155,6 +155,45 @@ router.get('/:id', auth, async (req, res) => {
   }
 });
 
+// ── GET /api/datasets/:id/approved-results ───────────────────
+/**
+ * @swagger
+ * /api/datasets/{id}/approved-results:
+ *   get:
+ *     summary: Get all approved tasks (images and labels) for a dataset
+ *     tags: [Datasets]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: List of approved tasks
+ */
+router.get('/:id/approved-results', auth, authorize('manager', 'admin', 'reviewer'), async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('tasks')
+      .select(`
+        id, status, annotation_data,
+        reviewer:profiles!reviewer_id(id, full_name, username),
+        annotator:profiles!annotator_id(id, full_name, username),
+        data_item:data_items!data_item_id(id, storage_url, filename)
+      `)
+      .eq('dataset_id', req.params.id)
+      .eq('status', 'approved');
+
+    if (error) throw error;
+    res.json(data || []);
+  } catch (err) {
+    console.error('[GET /datasets/:id/approved-results]', err);
+    res.status(500).json({ message: 'Failed to fetch approved results.', error: err.message });
+  }
+});
+
 // ── POST /api/datasets ───────────────────────────────────────
 /**
  * @swagger
