@@ -534,7 +534,7 @@ router.post('/:id/approve', auth, authorize('reviewer', 'admin'), async (req, re
     const { comment = '' } = req.body;
 
     const { data: stats } = await supabaseAdmin
-      .from('project_task_stats').select('*').eq('project_id', req.params.id).single();
+      .from('project_task_stats').select('*').eq('project_id', req.params.id).maybeSingle();
 
     const approvalRate = parseFloat(stats?.approval_rate || 0);
 
@@ -554,14 +554,14 @@ router.post('/:id/approve', auth, authorize('reviewer', 'admin'), async (req, re
       total_tasks:    stats.total_tasks,
     };
 
-    const { data: project, error } = await supabaseAdmin
+    const { data: projectList, error } = await supabaseAdmin
       .from('projects')
-      .update({ status: 'completed', project_review: projectReview, reviewed_tasks: stats.total_tasks })
+      .update({ status: 'completed', project_review: projectReview, reviewed_tasks: parseInt(stats?.total_tasks || 0, 10) })
       .eq('id', req.params.id)
-      .select('id, name, status')
-      .single();
+      .select('id, name, status');
 
     if (error) throw error;
+    const project = projectList?.[0] || { id: req.params.id, name: 'Project' };
 
     await logActivity({
       userId: req.user.id, action: 'project_approve',
@@ -611,7 +611,7 @@ router.post('/:id/reject', auth, authorize('reviewer', 'admin'), async (req, res
     if (!comment?.trim()) return res.status(400).json({ message: 'Rejection comment is required.' });
 
     const { data: stats } = await supabaseAdmin
-      .from('project_task_stats').select('*').eq('project_id', req.params.id).single();
+      .from('project_task_stats').select('*').eq('project_id', req.params.id).maybeSingle();
 
     const projectReview = {
       status: 'rejected', reviewed_by: req.user.id,
@@ -620,14 +620,14 @@ router.post('/:id/reject', auth, authorize('reviewer', 'admin'), async (req, res
       approval_rate: parseFloat(stats?.approval_rate || 0),
     };
 
-    const { data: project, error } = await supabaseAdmin
+    const { data: projectList, error } = await supabaseAdmin
       .from('projects')
       .update({ status: 'waiting_rework', project_review: projectReview })
       .eq('id', req.params.id)
-      .select('id, name, status')
-      .single();
+      .select('id, name, status');
 
     if (error) throw error;
+    const project = projectList?.[0] || { id: req.params.id, name: 'Project' };
 
     await logActivity({
       userId: req.user.id, action: 'project_reject',
