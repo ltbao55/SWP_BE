@@ -344,8 +344,15 @@ router.put('/:id/save', auth, authorize('annotator'), async (req, res) => {
     const { data: task } = await supabaseAdmin.from('tasks').select('id, status, annotator_id').eq('id', req.params.id).single();
     if (!task) return res.status(404).json({ message: 'Task not found.' });
     if (task.annotator_id !== req.user.id) return res.status(403).json({ message: 'This task is not assigned to you.' });
-    if (!['in_progress', 'assigned', 'rejected'].includes(task.status))
-      return res.status(400).json({ message: `Cannot save a task with status "${task.status}".` });
+    const currentStatus = (task.status || '').toLowerCase().trim();
+    const allowedStatuses = ['in_progress', 'assigned', 'rejected'];
+    
+    if (!allowedStatuses.includes(currentStatus)) {
+      console.log(`[DEBUG /save] Blocking save for Task ${req.params.id}. Status: "${currentStatus}" (Found: ${task.status})`);
+      return res.status(400).json({ 
+        message: `Cannot save a task with status "${task.status}". Allowed: ${allowedStatuses.join(', ')}` 
+      });
+    }
 
     // Group bboxes by label before persisting (adds `grouped` field, keeps `bboxes` for COCO export)
     const processedAnnotation = groupBboxesByLabel(annotation_data);

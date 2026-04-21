@@ -29,7 +29,7 @@
 
 const TRANSITIONS = {
   pending:      ['assigned'],
-  assigned:     ['in_progress'],
+  assigned:     ['in_progress', 'submitted', 'resubmitted'],
   in_progress:  ['submitted', 'resubmitted'],
   rejected:     ['in_progress', 'resubmitted'],
   submitted:    ['approved', 'rejected', 'expired'],
