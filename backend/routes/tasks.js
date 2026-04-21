@@ -422,9 +422,9 @@ router.post('/:id/submit', auth, authorize('annotator'), async (req, res) => {
         status: nextStatus, 
         submitted_at: new Date().toISOString(),
         review_comments: null,
-        review_notes: null,
-        review_issues: null,
-        error_category: null
+        review_notes: [],
+        review_issues: [],
+        error_category: 'other'
       })
       .eq('id', req.params.id).select('id, status, submitted_at').single();
     if (error) throw error;
