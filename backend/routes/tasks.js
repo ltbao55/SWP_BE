@@ -393,11 +393,13 @@ router.put('/:id/save', auth, authorize('annotator'), async (req, res) => {
 router.post('/:id/submit', auth, authorize('annotator'), async (req, res) => {
   try {
     const { annotation_data } = req.body;
-    const { data: task } = await supabaseAdmin.from('tasks').select('id, status, annotator_id, annotation_data').eq('id', req.params.id).single();
+    const { data: task } = await supabaseAdmin.from('tasks').select('id, status, annotator_id, annotation_data, review_comments').eq('id', req.params.id).single();
     if (!task) return res.status(404).json({ message: 'Task not found.' });
     if (task.annotator_id !== req.user.id) return res.status(403).json({ message: 'This task is not assigned to you.' });
 
-    const nextStatus = getSubmitStatus(task.status);
+    const isResubmission = task.status === 'rejected' || task.review_comments !== null;
+    const nextStatus = isResubmission ? 'resubmitted' : getSubmitStatus(task.status);
+    
     assertTransition(task.status, nextStatus);
 
     const rawAnnotation = annotation_data ?? task.annotation_data;
@@ -411,6 +413,12 @@ router.post('/:id/submit', auth, authorize('annotator'), async (req, res) => {
       .update({ annotation_data: finalAnnotation, status: nextStatus, submitted_at: new Date().toISOString() })
       .eq('id', req.params.id).select('id, status, submitted_at').single();
     if (error) throw error;
+
+    if (isResubmission) {
+      await supabaseAdmin.from('task_reviewers')
+        .update({ status: 'pending', comment: null })
+        .eq('task_id', req.params.id);
+    }
 
     await logActivity({ userId: req.user.id, action: 'task_submit', resourceType: 'task', resourceId: req.params.id,
       description: `Task submitted (${task.status} → ${nextStatus})`, req });
