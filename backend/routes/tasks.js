@@ -410,7 +410,15 @@ router.post('/:id/submit', auth, authorize('annotator'), async (req, res) => {
     const finalAnnotation = groupBboxesByLabel(rawAnnotation);
 
     const { data: updated, error } = await supabaseAdmin.from('tasks')
-      .update({ annotation_data: finalAnnotation, status: nextStatus, submitted_at: new Date().toISOString() })
+      .update({ 
+        annotation_data: finalAnnotation, 
+        status: nextStatus, 
+        submitted_at: new Date().toISOString(),
+        review_comments: null,
+        review_notes: null,
+        review_issues: null,
+        error_category: null
+      })
       .eq('id', req.params.id).select('id, status, submitted_at').single();
     if (error) throw error;
 

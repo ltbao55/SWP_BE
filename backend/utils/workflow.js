@@ -31,7 +31,7 @@ const TRANSITIONS = {
   pending:      ['assigned'],
   assigned:     ['in_progress'],
   in_progress:  ['submitted', 'resubmitted'],
-  rejected:     ['in_progress'],
+  rejected:     ['in_progress', 'resubmitted'],
   submitted:    ['approved', 'rejected', 'expired'],
   resubmitted:  ['approved', 'rejected', 'expired'],
   approved:     [],   // terminal
@@ -82,11 +82,11 @@ const resolveMajorityVote = (reviewerVotes, currentTaskStatus) => {
   const rejectCount  = votes.filter((v) => v.status === 'rejected').length;
   const decidedCount = approveCount + rejectCount;
 
-  // No reviewers assigned — default reject so annotator is notified
+  // No reviewers assigned - don't finalize to prevent auto-rejection
   if (total === 0) {
     return {
-      finalized:   true,
-      finalStatus: 'rejected',
+      finalized:   false,
+      finalStatus: currentTaskStatus,
       meta: { approveCount: 0, rejectCount: 0, decidedCount: 0, total: 0 },
     };
   }
