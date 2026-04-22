@@ -7,7 +7,6 @@ const express = require('express');
 const { supabaseAdmin }   = require('../config/supabase');
 const { auth, authorize } = require('../middleware/auth');
 const { logActivity }     = require('../utils/activityLogger');
-const { resolveMajorityVote } = require('../utils/workflow');
 const { approveValidators, rejectValidators, handleValidationErrors } = require('../utils/validators');
 
 const router = express.Router();
@@ -48,43 +47,72 @@ router.get('/pending', auth, authorize('reviewer', 'admin'), async (req, res) =>
     const { project_id, page = 1, limit = 50 } = req.query;
     const offset = (Number(page) - 1) * Number(limit);
 
-    // Tasks where reviewer is assigned AND has not voted yet
-    let taskIdsQuery = supabaseAdmin
-      .from('task_reviewers')
-      .select('task_id')
-      .eq('reviewer_id', req.user.id)
-      .eq('status', 'pending');
+    // 1. Fetch project policy if project_id is provided
+    let sampleRate = 1.0;
+    let isSampleMode = false;
+    if (project_id) {
+      const { data: project } = await supabaseAdmin
+        .from('projects')
+        .select('review_policy')
+        .eq('id', project_id)
+        .single();
+      if (project?.review_policy?.mode === 'sample') {
+        isSampleMode = true;
+        sampleRate = parseFloat(project.review_policy.sample_rate || 1.0);
+      }
+    }
 
-    const { data: pendingAssignments } = await taskIdsQuery;
-    const taskIds = (pendingAssignments || []).map((r) => r.task_id);
-
-    // Also include tasks where reviewer_id is set directly (single-reviewer mode)
+    // 2. Build the query
     let query = supabaseAdmin
       .from('tasks')
       .select(TASK_WITH_PROJECT, { count: 'exact' })
       .in('status', ['submitted', 'resubmitted'])
-      .order('submitted_at', { ascending: true })
-      .range(offset, offset + Number(limit) - 1);
-
-    if (taskIds.length > 0) {
-      query = query.or(`id.in.(${taskIds.join(',')}),reviewer_id.eq.${req.user.id}`);
-    } else {
-      query = query.eq('reviewer_id', req.user.id);
-    }
+      .order('submitted_at', { ascending: true });
 
     if (project_id) query = query.eq('project_id', project_id);
+    if (req.user.role === 'reviewer') {
+      query = query.or(`reviewer_id.is.null,reviewer_id.eq.${req.user.id}`);
+    }
 
     const { data, error, count } = await query;
     if (error) throw error;
 
-    // Filter out tasks where deadline has passed (no reviews after deadline)
+    let finalData = data || [];
+
+    // 3. Apply Stratified Sampling (by Annotator) if needed
+    if (isSampleMode && sampleRate < 1.0) {
+      const groupedByAnnotator = {};
+      finalData.forEach(task => {
+        const aid = task.annotator_id || 'unassigned';
+        if (!groupedByAnnotator[aid]) groupedByAnnotator[aid] = [];
+        groupedByAnnotator[aid].push(task);
+      });
+
+      let stratified = [];
+      Object.values(groupedByAnnotator).forEach(tasks => {
+        // Shuffle and pick top N%
+        const shuffled = tasks.sort(() => 0.5 - Math.random());
+        const takeCount = Math.ceil(tasks.length * sampleRate);
+        stratified = stratified.concat(shuffled.slice(0, takeCount));
+      });
+      finalData = stratified;
+    }
+
+    // 4. Apply Pagination and Deadline Filter
     const now = new Date();
-    const actionable = (data || []).filter((t) => {
+    const actionable = finalData.filter((t) => {
       const deadline = t.project?.deadline;
       return !deadline || new Date(deadline) > now;
     });
 
-    res.json({ data: actionable, total: actionable.length, raw_count: count });
+    const paginated = actionable.slice(offset, offset + Number(limit));
+
+    res.json({ 
+      data: paginated, 
+      total: actionable.length, 
+      raw_count: count,
+      sampling: isSampleMode ? `stratified_${sampleRate*100}%` : 'full'
+    });
   } catch (err) {
     console.error('[GET /reviews/pending]', err);
     res.status(500).json({ message: 'Failed to fetch pending reviews.', error: err.message });
@@ -195,47 +223,15 @@ router.get('/stats', auth, authorize('reviewer', 'manager', 'admin'), async (req
   }
 });
 
-// ── GET /api/reviews/task/:id ─────────────────────────────────
-/**
- * @swagger
- * /api/reviews/task/{id}:
- *   get:
- *     summary: Get a task for review (reviewer must be assigned)
- *     tags: [Reviews]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema: { type: string, format: uuid }
- *     responses:
- *       200:
- *         description: Task with annotation data and reviewer votes
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/Task' }
- *       403:
- *         description: Not assigned to this task
- *       404:
- *         description: Task not found
- */
 router.get('/task/:id', auth, authorize('reviewer', 'admin'), async (req, res) => {
   try {
     const { data: task, error } = await supabaseAdmin
       .from('tasks')
-      .select(TASK_WITH_PROJECT + `, task_reviewers(id, reviewer_id, status, comment, reviewed_at, reviewer:profiles!reviewer_id(id, username, full_name))`)
+      .select(TASK_WITH_PROJECT)
       .eq('id', req.params.id)
       .single();
     if (error || !task) return res.status(404).json({ message: 'Task not found.' });
 
-    // Verify reviewer is assigned to this task
-    const isAssigned =
-      task.reviewer?.id === req.user.id ||
-      (task.task_reviewers || []).some((r) => r.reviewer_id === req.user.id) ||
-      req.user.role === 'admin';
-
-    if (!isAssigned) return res.status(403).json({ message: 'You are not assigned to review this task.' });
     res.json(task);
   } catch (err) {
     console.error('[GET /reviews/task/:id]', err);
@@ -248,7 +244,7 @@ router.get('/task/:id', auth, authorize('reviewer', 'admin'), async (req, res) =
  * @swagger
  * /api/reviews/{id}/approve:
  *   post:
- *     summary: Approve a submitted task (supports multi-reviewer majority vote)
+ *     summary: Approve a submitted task
  *     tags: [Reviews]
  *     security:
  *       - bearerAuth: []
@@ -270,18 +266,9 @@ router.get('/task/:id', auth, authorize('reviewer', 'admin'), async (req, res) =
  *                 items: { type: string }
  *     responses:
  *       200:
- *         description: Vote recorded (finalized if majority reached)
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message:   { type: string }
- *                 task:      { $ref: '#/components/schemas/Task' }
- *                 finalized: { type: boolean }
- *                 decision:  { type: object }
+ *         description: Task approved
  *       400:
- *         description: Task not in reviewable state, already voted, or deadline passed
+ *         description: Task not in reviewable state or deadline passed
  */
 router.post('/:id/approve', auth, authorize('reviewer', 'admin'), approveValidators, handleValidationErrors, async (req, res) => {
   try {
@@ -290,7 +277,7 @@ router.post('/:id/approve', auth, authorize('reviewer', 'admin'), approveValidat
 
     const { data: task, error: taskErr } = await supabaseAdmin
       .from('tasks')
-      .select('id, status, annotation_data, reviewer_id, project:projects!project_id(deadline)')
+      .select('id, status, annotation_data, project:projects!project_id(deadline)')
       .eq('id', req.params.id)
       .single();
     if (taskErr || !task) return res.status(404).json({ message: 'Task not found.' });
@@ -310,29 +297,12 @@ router.post('/:id/approve', auth, authorize('reviewer', 'admin'), approveValidat
       return res.status(400).json({ message: 'Task deadline has passed — cannot review.' });
     }
 
-    // Multi-reviewer: record this reviewer's vote
-    const { data: myVote } = await supabaseAdmin.from('task_reviewers')
-      .select('id, status').eq('task_id', req.params.id).eq('reviewer_id', req.user.id).maybeSingle();
-
-    if (myVote) {
-      if (myVote.status !== 'pending') return res.status(400).json({ message: 'You have already voted on this task.' });
-      await supabaseAdmin.from('task_reviewers')
-        .update({ status: 'approved', comment: review_comments, reviewed_at: now })
-        .eq('id', myVote.id);
-    }
-
-    // Resolve final status via majority vote
-    const { data: allVotes } = await supabaseAdmin.from('task_reviewers')
-      .select('status').eq('task_id', req.params.id);
-
-    const decision = resolveMajorityVote(allVotes || [], task.status);
-
     const taskUpdate = {
-      status:          decision.finalStatus,
-      review_comments: decision.finalStatus === 'approved' ? review_comments : task.review_comments,
-      review_notes:    decision.finalStatus === 'approved' ? review_notes : task.review_notes,
-      reviewed_at:     decision.finalized ? now : task.reviewed_at,
-      reviewer_id:     decision.finalized ? req.user.id : task.reviewer_id,
+      status:          'approved',
+      review_comments: review_comments,
+      review_notes:    review_notes,
+      reviewed_at:     now,
+      reviewer_id:     req.user.id,
     };
 
     const { data: updated, error: updateErr } = await supabaseAdmin
@@ -340,15 +310,9 @@ router.post('/:id/approve', auth, authorize('reviewer', 'admin'), approveValidat
     if (updateErr) throw updateErr;
 
     await logActivity({ userId: req.user.id, action: 'task_approve', resourceType: 'task',
-      resourceId: req.params.id, description: `Task approve vote. Final: ${decision.finalStatus}`,
-      metadata: { decision, finalized: decision.finalized }, req });
+      resourceId: req.params.id, description: `Task approved by reviewer`, req });
 
-    res.json({
-      message:   decision.finalized ? `Task ${decision.finalStatus}.` : 'Vote recorded. Awaiting other reviewers.',
-      task:      updated,
-      finalized: decision.finalized,
-      decision:  decision.meta,
-    });
+    res.json({ message: 'Task approved.', task: updated });
   } catch (err) {
     console.error('[POST /reviews/:id/approve]', err);
     res.status(500).json({ message: 'Failed to approve task.', error: err.message });
@@ -360,7 +324,7 @@ router.post('/:id/approve', auth, authorize('reviewer', 'admin'), approveValidat
  * @swagger
  * /api/reviews/{id}/reject:
  *   post:
- *     summary: Reject a submitted task with a required comment (supports majority vote)
+ *     summary: Reject a submitted task with a required comment
  *     tags: [Reviews]
  *     security:
  *       - bearerAuth: []
@@ -391,9 +355,9 @@ router.post('/:id/approve', auth, authorize('reviewer', 'admin'), approveValidat
  *                 items: { type: object }
  *     responses:
  *       200:
- *         description: Vote recorded (finalized if majority reached)
+ *         description: Task rejected
  *       400:
- *         description: Task not reviewable, already voted, or deadline passed
+ *         description: Task not reviewable or deadline passed
  */
 router.post('/:id/reject', auth, authorize('reviewer', 'admin'), rejectValidators, handleValidationErrors, async (req, res) => {
   try {
@@ -402,7 +366,7 @@ router.post('/:id/reject', auth, authorize('reviewer', 'admin'), rejectValidator
 
     const { data: task, error: taskErr } = await supabaseAdmin
       .from('tasks')
-      .select('id, status, reviewer_id, project:projects!project_id(deadline)')
+      .select('id, status, project:projects!project_id(deadline)')
       .eq('id', req.params.id)
       .single();
     if (taskErr || !task) return res.status(404).json({ message: 'Task not found.' });
@@ -418,50 +382,25 @@ router.post('/:id/reject', auth, authorize('reviewer', 'admin'), rejectValidator
       return res.status(400).json({ message: 'Task deadline has passed — cannot review.' });
     }
 
-    // Multi-reviewer: record this reviewer's vote
-    const { data: myVote } = await supabaseAdmin.from('task_reviewers')
-      .select('id, status').eq('task_id', req.params.id).eq('reviewer_id', req.user.id).maybeSingle();
-
-    if (myVote) {
-      if (myVote.status !== 'pending') return res.status(400).json({ message: 'You have already voted on this task.' });
-      await supabaseAdmin.from('task_reviewers')
-        .update({ status: 'rejected', comment: review_comments, reviewed_at: now })
-        .eq('id', myVote.id);
-    }
-
-    // Resolve final status via majority vote
-    const { data: allVotes } = await supabaseAdmin.from('task_reviewers')
-      .select('status').eq('task_id', req.params.id);
-
-    const decision = resolveMajorityVote(allVotes || [], task.status);
-
     const taskUpdate = {
-      status:       decision.finalStatus,
-      reviewed_at:  decision.finalized ? now : task.reviewed_at,
-      reviewer_id:  decision.finalized ? req.user.id : task.reviewer_id,
+      status:          'rejected',
+      reviewed_at:     now,
+      reviewer_id:     req.user.id,
+      review_comments: review_comments,
+      error_category:  error_category,
+      review_notes:    review_notes,
+      review_issues:   review_issues,
     };
-
-    if (decision.finalized && decision.finalStatus === 'rejected') {
-      taskUpdate.review_comments = review_comments;
-      taskUpdate.error_category  = error_category;
-      taskUpdate.review_notes    = review_notes;
-      taskUpdate.review_issues   = review_issues;
-    }
 
     const { data: updated, error: updateErr } = await supabaseAdmin
       .from('tasks').update(taskUpdate).eq('id', req.params.id).select('id, status, review_comments, error_category, reviewed_at').single();
     if (updateErr) throw updateErr;
 
     await logActivity({ userId: req.user.id, action: 'task_reject', resourceType: 'task',
-      resourceId: req.params.id, description: `Task reject vote. Final: ${decision.finalStatus}`,
-      metadata: { error_category, decision, finalized: decision.finalized }, req });
+      resourceId: req.params.id, description: `Task rejected by reviewer`,
+      metadata: { error_category }, req });
 
-    res.json({
-      message:   decision.finalized ? `Task ${decision.finalStatus}.` : 'Vote recorded. Awaiting other reviewers.',
-      task:      updated,
-      finalized: decision.finalized,
-      decision:  decision.meta,
-    });
+    res.json({ message: 'Task rejected.', task: updated });
   } catch (err) {
     console.error('[POST /reviews/:id/reject]', err);
     res.status(500).json({ message: 'Failed to reject task.', error: err.message });

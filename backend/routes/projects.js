@@ -30,7 +30,7 @@ const shapeProject = (project) => {
   };
 };
 
-async function autoDistributeTasks({ project, dataset_id, annotators, reviewers, reviewers_per_item }) {
+async function autoDistributeTasks({ project, dataset_id, annotators, reviewer_id }) {
   // 1) all data_items in the dataset
   const { data: items } = await supabaseAdmin
     .from('data_items').select('id').eq('dataset_id', dataset_id);
@@ -42,7 +42,7 @@ async function autoDistributeTasks({ project, dataset_id, annotators, reviewers,
     dataset_id,
     data_item_id: it.id,
     annotator_id: annotators[i % annotators.length],
-    reviewer_id:  reviewers.length ? reviewers[i % reviewers.length] : null,
+    reviewer_id:  reviewer_id || null,
     status:       'assigned',
   }));
 
@@ -50,19 +50,7 @@ async function autoDistributeTasks({ project, dataset_id, annotators, reviewers,
     .from('tasks').insert(taskRows).select('id');
   if (tErr) throw tErr;
 
-  // 3) task_reviewers for multi-reviewer voting
-  if (reviewers.length > 0 && insertedTasks?.length) {
-    const perItem = Math.min(reviewers_per_item || 1, reviewers.length);
-    const revRows = [];
-    insertedTasks.forEach((t, i) => {
-      for (let k = 0; k < perItem; k++) {
-        revRows.push({ task_id: t.id, reviewer_id: reviewers[(i + k) % reviewers.length], status: 'pending' });
-      }
-    });
-    if (revRows.length > 0) await supabaseAdmin.from('task_reviewers').insert(revRows);
-  }
-
-  // 4) update project counters + status
+  // 3) update project counters + status
   await supabaseAdmin.from('projects')
     .update({ total_tasks: insertedTasks.length, status: 'active' })
     .eq('id', project.id);
@@ -223,10 +211,10 @@ router.get('/:id', auth, async (req, res) => {
  *                 type: array
  *                 items: { type: string, format: uuid }
  *                 description: User IDs with role=annotator to assign to this project
- *               reviewer_ids:
- *                 type: array
- *                 items: { type: string, format: uuid }
- *                 description: User IDs with role=reviewer to assign to this project
+ *               reviewer_id:
+ *                 type: string
+ *                 format: uuid
+ *                 description: Specific reviewer for the project tasks
  *     responses:
  *       201:
  *         description: Project created
@@ -248,11 +236,10 @@ router.post(
         dataset_id    = null,
         label_ids     = [],
         annotator_ids = [],
-        reviewer_ids  = [],
+        reviewer_id   = null,
       } = req.body;
 
       const annotators = [...new Set(annotator_ids)];
-      const reviewers  = [...new Set(reviewer_ids)];
       const labels     = [...new Set(label_ids)];
 
       // ── STEP 1: insert project ──
@@ -273,7 +260,7 @@ router.post(
       // ── STEP 2: insert project_members ──
       const memberRows = [
         ...annotators.map((uid) => ({ project_id: project.id, user_id: uid, role: 'annotator' })),
-        ...reviewers.map((uid)  => ({ project_id: project.id, user_id: uid, role: 'reviewer'  })),
+        ...(reviewer_id ? [{ project_id: project.id, user_id: reviewer_id, role: 'reviewer' }] : []),
       ];
       if (memberRows.length > 0) {
         const { error: memErr } = await supabaseAdmin.from('project_members').insert(memberRows);
@@ -307,8 +294,7 @@ router.post(
           project: fullProject,
           dataset_id,
           annotators,
-          reviewers,
-          reviewers_per_item: review_policy?.reviewers_per_item || 1,
+          reviewer_id,
         });
       }
 
