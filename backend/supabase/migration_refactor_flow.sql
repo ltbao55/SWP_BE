@@ -11,10 +11,10 @@ ALTER TABLE IF EXISTS public.data_items DROP COLUMN IF EXISTS subtopic_id CASCAD
 ALTER TABLE IF EXISTS public.label_sets DROP COLUMN IF EXISTS subtopic_id CASCADE;
 DROP TABLE IF EXISTS public.subtopics CASCADE;
 DROP TABLE IF EXISTS public.topics CASCADE;
+DROP TABLE IF EXISTS public.task_reviewers CASCADE;
 
 -- 2. Modify data_items to depend cleanly on dataset_id
 -- We must make dataset_id NOT NULL. If there are orphans, we can delete them.
-DELETE FROM public.task_reviewers WHERE task_id IN (SELECT id FROM public.tasks WHERE data_item_id IN (SELECT id FROM public.data_items WHERE dataset_id IS NULL));
 DELETE FROM public.tasks WHERE data_item_id IN (SELECT id FROM public.data_items WHERE dataset_id IS NULL);
 DELETE FROM public.data_items WHERE dataset_id IS NULL;
 ALTER TABLE public.data_items ALTER COLUMN dataset_id SET NOT NULL;

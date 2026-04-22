@@ -200,10 +200,10 @@ router.get('/:id', auth, async (req, res) => {
  *               annotator_ids:
  *                 type: array
  *                 items: { type: string, format: uuid }
- *               reviewer_ids:
- *                 type: array
- *                 items: { type: string, format: uuid }
- *                 description: Optional list of reviewers for multi-reviewer consensus
+ *               reviewer_id:
+ *                 type: string
+ *                 format: uuid
+ *                 description: Optional explicit reviewer assignment
  *     responses:
  *       201:
  *         description: Tasks auto-split and assigned
@@ -214,7 +214,7 @@ router.get('/:id', auth, async (req, res) => {
  */
 router.post('/assign', auth, authorize('manager', 'admin'), async (req, res) => {
   try {
-    const { project_id, dataset_id, annotator_ids = [], reviewer_ids = [] } = req.body;
+    const { project_id, dataset_id, annotator_ids = [], reviewer_id = null } = req.body;
 
     if (!annotator_ids || annotator_ids.length === 0) {
       return res.status(400).json({ message: 'Must provide at least one annotator_id.' });
@@ -245,24 +245,19 @@ router.post('/assign', auth, authorize('manager', 'admin'), async (req, res) => 
     }
 
     const annotators = validAnnotators.map(a => a.id);
-    const reviewers = reviewer_ids || [];
 
     // Round-robin distribution
     const taskInserts = unassignedItems.map((item, i) => ({
       project_id, dataset_id, data_item_id: item.id,
       annotator_id: annotators[i % annotators.length],
+      reviewer_id: reviewer_id || null,
       status: 'assigned',
     }));
 
     const { data: tasks, error: taskError } = await supabaseAdmin.from('tasks').insert(taskInserts).select('id, data_item_id, status');
     if (taskError) throw taskError;
 
-    if (reviewers.length > 0) {
-      const reviewerInserts = [];
-      tasks.forEach((task, i) => reviewerInserts.push({ task_id: task.id, reviewer_id: reviewers[i % reviewers.length], status: 'pending' }));
-      await supabaseAdmin.from('task_reviewers').insert(reviewerInserts);
-      await supabaseAdmin.from('tasks').update({ reviewer_id: reviewers[0] }).in('id', tasks.map((t) => t.id));
-    }
+
 
     const dataItemIds = tasks.map(t => t.data_item_id);
     await supabaseAdmin.from('data_items').update({ status: 'assigned' }).in('id', dataItemIds);
