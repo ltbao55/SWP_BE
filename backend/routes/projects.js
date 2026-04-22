@@ -145,7 +145,7 @@ router.get('/', auth, async (req, res) => {
  * @swagger
  * /api/projects/{id}:
  *   get:
- *     summary: Get project details (includes label sets and task stats)
+ *     summary: Get project details (includes labels and task stats)
  *     tags: [Projects]
  *     security:
  *       - bearerAuth: []
@@ -156,7 +156,7 @@ router.get('/', auth, async (req, res) => {
  *         schema: { type: string, format: uuid }
  *     responses:
  *       200:
- *         description: Project with label_sets and stats
+ *         description: Project with project_labels and stats
  *         content:
  *           application/json:
  *             schema: { $ref: '#/components/schemas/Project' }

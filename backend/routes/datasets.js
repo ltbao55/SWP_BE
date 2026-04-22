@@ -234,7 +234,7 @@ router.get('/:id/approved-results', auth, authorize('manager', 'admin', 'reviewe
  *         application/json:
  *           schema:
  *             type: object
- *             required: [name, type, topic_id]
+ *             required: [name, type]
  *             properties:
  *               name:
  *                 type: string
@@ -244,16 +244,7 @@ router.get('/:id/approved-results', auth, authorize('manager', 'admin', 'reviewe
  *               type:
  *                 type: string
  *                 enum: [image, text, audio, video]
- *               topic_id:
- *                 type: string
- *                 format: uuid
- *                 description: Required — topic this dataset belongs to
- *               subtopic_ids:
- *                 type: array
- *                 items:
- *                   type: string
- *                   format: uuid
- *                 description: Subtopics (must belong to topic_id)
+
  *               project_id:
  *                 type: string
  *                 format: uuid

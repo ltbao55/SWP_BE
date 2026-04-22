@@ -70,8 +70,8 @@ router.post('/pre-label/:taskId', auth, async (req, res) => {
       .select(`
         id, status, annotator_id, annotation_data,
         data_item:data_items!data_item_id(id, storage_path, storage_url, mime_type),
-        label_set:label_sets!label_set_id(id, name,
-          labels(id, name, description)
+        project:projects!project_id(
+          project_labels(label:labels(id, name, description))
         )
       `)
       .eq('id', req.params.taskId)
@@ -95,8 +95,9 @@ router.post('/pre-label/:taskId', auth, async (req, res) => {
       return res.status(400).json({ message: `AI pre-labeling only supports images. Got: ${mime}` });
     }
 
-    if (!task.label_set || !task.label_set.labels?.length) {
-      return res.status(400).json({ message: 'Task has no label set with labels.' });
+    const projectLabels = (task.project?.project_labels || []).map(pl => pl.label).filter(Boolean);
+    if (projectLabels.length === 0) {
+      return res.status(400).json({ message: 'Task has no associated project labels.' });
     }
 
     // Get a working URL — prefer signed URL for private buckets
@@ -112,7 +113,7 @@ router.post('/pre-label/:taskId', auth, async (req, res) => {
       return res.status(400).json({ message: 'Image URL is not available.' });
     }
 
-    const aiResult = await preLabelImage(imageUrl, task.label_set.labels);
+    const aiResult = await preLabelImage(imageUrl, projectLabels);
 
     let applied = false;
     if (apply && isOwner) {

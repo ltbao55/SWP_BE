@@ -15,10 +15,9 @@ const router = express.Router();
 const TASK_WITH_PROJECT = `
   id, status, annotation_data, review_comments, error_category,
   review_notes, submitted_at, created_at,
-  project:projects!project_id(id, name, guidelines, deadline),
+  project:projects!project_id(id, name, guidelines, deadline, project_labels(label:labels(*))),
   data_item:data_items!data_item_id(id, filename, storage_url, mime_type),
-  annotator:profiles!annotator_id(id, username, full_name),
-  label_set:label_sets!label_set_id(id, name, labels(*))
+  annotator:profiles!annotator_id(id, username, full_name)
 `;
 
 // ── GET /api/reviews/pending ──────────────────────────────────
