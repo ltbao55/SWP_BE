@@ -237,7 +237,11 @@ router.post(
         label_ids     = [],
         annotator_ids = [],
         reviewer_id   = null,
+        reviewer_ids  = [],
       } = req.body;
+
+      // Backward compatibility: if reviewer_ids provided but reviewer_id is not, take first
+      const finalReviewerId = reviewer_id || (reviewer_ids && reviewer_ids.length > 0 ? reviewer_ids[0] : null);
 
       const annotators = [...new Set(annotator_ids)];
       const labels     = [...new Set(label_ids)];
@@ -260,7 +264,7 @@ router.post(
       // ── STEP 2: insert project_members ──
       const memberRows = [
         ...annotators.map((uid) => ({ project_id: project.id, user_id: uid, role: 'annotator' })),
-        ...(reviewer_id ? [{ project_id: project.id, user_id: reviewer_id, role: 'reviewer' }] : []),
+        ...(finalReviewerId ? [{ project_id: project.id, user_id: finalReviewerId, role: 'reviewer' }] : []),
       ];
       if (memberRows.length > 0) {
         const { error: memErr } = await supabaseAdmin.from('project_members').insert(memberRows);
@@ -294,7 +298,7 @@ router.post(
           project: fullProject,
           dataset_id,
           annotators,
-          reviewer_id,
+          reviewer_id: finalReviewerId,
         });
       }
 

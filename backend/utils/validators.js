@@ -50,8 +50,9 @@ const projectValidators = [
   body('dataset_id').optional({ nullable: true }).isUUID().withMessage('dataset_id must be a valid UUID.'),
   body('annotator_ids').optional().isArray().withMessage('annotator_ids must be an array.'),
   body('annotator_ids.*').optional().isUUID().withMessage('Each annotator_id must be a UUID.'),
-  body('reviewer_ids').optional().isArray().withMessage('reviewer_ids must be an array.'),
-  body('reviewer_ids.*').optional().isUUID().withMessage('Each reviewer_id must be a UUID.'),
+  body('reviewer_id').optional({ nullable: true }).isUUID().withMessage('reviewer_id must be a valid UUID.'),
+  body('label_ids').optional().isArray().withMessage('label_ids must be an array.'),
+  body('label_ids.*').optional().isUUID().withMessage('Each label_id must be a UUID.'),
 ];
 
 // ── Dataset ───────────────────────────────────────────────────
@@ -59,9 +60,6 @@ const datasetValidators = [
   body('name').trim().isLength({ min: 2, max: 200 }).withMessage('Dataset name must be 2-200 chars.'),
   body('type').isIn(['image', 'text', 'audio', 'video']).withMessage('Type must be image|text|audio|video.'),
   body('project_id').optional({ nullable: true }).isUUID().withMessage('project_id must be a valid UUID.'),
-  body('topic_id').isUUID().withMessage('topic_id is required and must be a valid UUID.'),
-  body('subtopic_ids').optional().isArray().withMessage('subtopic_ids must be an array.'),
-  body('subtopic_ids.*').optional().isUUID().withMessage('Each subtopic_id must be a valid UUID.'),
 ];
 
 // ── Task ──────────────────────────────────────────────────────
