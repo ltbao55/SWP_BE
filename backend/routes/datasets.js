@@ -35,24 +35,14 @@ const upload = multer({
 });
 
 const DATASET_SELECT = `
-  id, name, description, type, status, total_items, storage_path, metadata, topic_id, created_at, updated_at,
+  id, name, description, type, status, total_items, storage_path, metadata, created_at, updated_at,
   manager:profiles!manager_id(id, username, full_name),
-  project:projects!project_id(id, name),
-  topic:topics!topic_id(id, name, color),
-  subtopics:dataset_subtopics(subtopic:subtopics(id, name, topic_id))
+  project:projects!project_id(id, name)
 `;
 
-// Flatten nested joins → expose topic_name + subtopics[] at the top level.
-// Shape returned to FE:
-//   { ...dataset, topic: {...}, topic_name, subtopics: [{id,name,topic_id}, ...] }
+// Identity shape (kept for compatibility with frontend if needed)
 const shapeDataset = (row) => {
-  if (!row) return row;
-  const subtopics = (row.subtopics || []).map((s) => s.subtopic).filter(Boolean);
-  return {
-    ...row,
-    subtopics,
-    topic_name: row.topic?.name || null,
-  };
+  return row;
 };
 
 // ── GET /api/datasets ────────────────────────────────────────
@@ -276,52 +266,21 @@ router.get('/:id/approved-results', auth, authorize('manager', 'admin', 'reviewe
  *             schema: { $ref: '#/components/schemas/Dataset' }
  */
 router.post('/', auth, authorize('manager', 'admin'), datasetValidators, handleValidationErrors, async (req, res) => {
-  // Body: { name, description, type, topic_id (required), subtopic_ids: UUID[] }
+  // Body: { name, description, type }
   const {
     name, description = '', type,
-    topic_id,
-    subtopic_ids = [],
     project_id = null, metadata = {},
   } = req.body;
 
-  // ── Guard: topic_id is REQUIRED (khớp với UI Create Dataset) ──
-  if (!topic_id) {
-    return res.status(400).json({ message: 'topic_id is required.' });
-  }
-
-  // Dedupe subtopic_ids
-  const subIds = [...new Set(Array.isArray(subtopic_ids) ? subtopic_ids : [])];
-
   let createdDatasetId = null;
   try {
-    // ── STEP 1: verify topic + subtopics trước khi ghi gì vào DB ──
-    const { data: topic, error: topicErr } = await supabaseAdmin
-      .from('topics').select('id, name').eq('id', topic_id).single();
-    if (topicErr || !topic) {
-      return res.status(400).json({ message: 'Topic not found.' });
-    }
-
-    if (subIds.length > 0) {
-      const { data: validSubs } = await supabaseAdmin
-        .from('subtopics').select('id').eq('topic_id', topic_id).in('id', subIds);
-      const validSet = new Set((validSubs || []).map((s) => s.id));
-      const invalid  = subIds.filter((id) => !validSet.has(id));
-      if (invalid.length > 0) {
-        return res.status(400).json({
-          message: 'Some subtopic_ids do not belong to the given topic.',
-          invalid,
-        });
-      }
-    }
-
-    // ── STEP 2: INSERT dataset (thông tin chung + topic_id) ──
+    // ── INSERT dataset ──
     const { data: dataset, error: insertErr } = await supabaseAdmin
       .from('datasets')
       .insert({
         name,
         description,
         type,
-        topic_id,
         project_id,
         manager_id: req.user.id,
         metadata,
@@ -332,16 +291,7 @@ router.post('/', auth, authorize('manager', 'admin'), datasetValidators, handleV
     if (insertErr) throw insertErr;
     createdDatasetId = dataset.id;
 
-    // ── STEP 3: BULK INSERT dataset_subtopics (M–N junction) ──
-    // Với mỗi subtopic_id → 1 row {dataset_id, subtopic_id}.
-    // Nếu fail → DELETE dataset vừa tạo để rollback (Supabase JS không có TX thật).
-    if (subIds.length > 0) {
-      const rows = subIds.map((sid) => ({ dataset_id: createdDatasetId, subtopic_id: sid }));
-      const { error: linkErr } = await supabaseAdmin.from('dataset_subtopics').insert(rows);
-      if (linkErr) throw linkErr;
-    }
-
-    // ── STEP 4: RE-SELECT full dataset với topic + subtopics để trả FE ──
+    // ── RE-SELECT full dataset ──
     const { data: full, error: selErr } = await supabaseAdmin
       .from('datasets')
       .select(DATASET_SELECT)
@@ -352,13 +302,12 @@ router.post('/', auth, authorize('manager', 'admin'), datasetValidators, handleV
     await logActivity({
       userId: req.user.id, action: 'dataset_upload', resourceType: 'dataset',
       resourceId: createdDatasetId,
-      description: `Dataset "${name}" created under topic "${topic.name}"`,
-      metadata: { name, type, topic_id, subtopic_ids: subIds }, req,
+      description: `Dataset "${name}" created`,
+      metadata: { name, type }, req,
     });
 
     return res.status(201).json(shapeDataset(full));
   } catch (err) {
-    // Manual rollback: xoá dataset nếu đã tạo nhưng step sau fail
     if (createdDatasetId) {
       await supabaseAdmin.from('datasets').delete().eq('id', createdDatasetId);
     }

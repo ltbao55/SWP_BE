@@ -11,69 +11,38 @@ const { projectValidators, handleValidationErrors } = require('../utils/validato
 
 const router = express.Router();
 
-// ── Helpers ──────────────────────────────────────────────────
 const PROJECT_SELECT = `
   id, name, description, guidelines, status, deadline,
   export_format, review_policy, total_tasks, reviewed_tasks,
   project_review, metadata, dataset_id, created_at, updated_at,
   manager:profiles!manager_id(id, username, full_name),
-  dataset:datasets!dataset_id(
-    id, name, topic_id,
-    topic:topics!topic_id(id, name),
-    subtopics:dataset_subtopics(subtopic:subtopics(id, name))
-  ),
-  members:project_members(role, user:profiles!user_id(id, username, full_name))
+  dataset:datasets!dataset_id(id, name),
+  members:project_members(role, user:profiles!user_id(id, username, full_name)),
+  project_labels(label:labels(id, name, color, description))
 `;
 
-/**
- * Flatten Supabase nested join shape for dataset.subtopics.
- * Raw:  dataset.subtopics = [{ subtopic: { id, name } }, ...]
- * Out:  dataset.subtopics = [{ id, name }, ...]
- */
 const shapeProject = (project) => {
-  if (!project || !project.dataset) return project;
-  const subtopics = (project.dataset.subtopics || [])
-    .map((s) => s.subtopic)
-    .filter(Boolean);
+  if (!project) return project;
+  const labels = (project.project_labels || []).map((pl) => pl.label).filter(Boolean);
   return {
     ...project,
-    dataset: {
-      ...project.dataset,
-      subtopics,
-    },
+    labels,
   };
 };
 
-/**
- * Auto-distribute tasks from a Dataset across annotators (round-robin).
- * Data flow: dataset → dataset_subtopics → data_items (by subtopic_id) → tasks.
- * Also inserts task_reviewers for each reviewer (multi-reviewer vote model).
- */
 async function autoDistributeTasks({ project, dataset_id, annotators, reviewers, reviewers_per_item }) {
-  // 1) subtopic_ids linked to this dataset
-  const { data: subLinks } = await supabaseAdmin
-    .from('dataset_subtopics').select('subtopic_id').eq('dataset_id', dataset_id);
-  const subtopicIds = (subLinks || []).map((r) => r.subtopic_id);
-  if (subtopicIds.length === 0) return { created: 0 };
-
-  // 2) all data_items in those subtopics
+  // 1) all data_items in the dataset
   const { data: items } = await supabaseAdmin
-    .from('data_items').select('id').in('subtopic_id', subtopicIds);
+    .from('data_items').select('id').eq('dataset_id', dataset_id);
   if (!items || items.length === 0) return { created: 0 };
 
-  // 3) first label_set in those subtopics (UI may later allow picking)
-  const { data: lsRows } = await supabaseAdmin
-    .from('label_sets').select('id').in('subtopic_id', subtopicIds).limit(1);
-  const label_set_id = lsRows?.[0]?.id || null;
-
-  // 4) round-robin assign annotators
+  // 2) round-robin assign annotators
   const taskRows = items.map((it, i) => ({
     project_id:   project.id,
     dataset_id,
     data_item_id: it.id,
     annotator_id: annotators[i % annotators.length],
     reviewer_id:  reviewers.length ? reviewers[i % reviewers.length] : null,
-    label_set_id,
     status:       'assigned',
   }));
 
@@ -81,7 +50,7 @@ async function autoDistributeTasks({ project, dataset_id, annotators, reviewers,
     .from('tasks').insert(taskRows).select('id');
   if (tErr) throw tErr;
 
-  // 5) task_reviewers for multi-reviewer voting
+  // 3) task_reviewers for multi-reviewer voting
   if (reviewers.length > 0 && insertedTasks?.length) {
     const perItem = Math.min(reviewers_per_item || 1, reviewers.length);
     const revRows = [];
@@ -93,7 +62,7 @@ async function autoDistributeTasks({ project, dataset_id, annotators, reviewers,
     if (revRows.length > 0) await supabaseAdmin.from('task_reviewers').insert(revRows);
   }
 
-  // 6) update project counters + status
+  // 4) update project counters + status
   await supabaseAdmin.from('projects')
     .update({ total_tasks: insertedTasks.length, status: 'active' })
     .eq('id', project.id);
@@ -198,12 +167,7 @@ router.get('/:id', auth, async (req, res) => {
   try {
     const { data: project, error } = await supabaseAdmin
       .from('projects')
-      .select(`
-        ${PROJECT_SELECT},
-        label_sets(id, name, description, allow_multiple, required,
-          labels(id, name, color, description, shortcut, sort_order)
-        )
-      `)
+      .select(PROJECT_SELECT)
       .eq('id', req.params.id)
       .single();
 
@@ -282,12 +246,14 @@ router.post(
         review_policy = { mode: 'full', sample_rate: 1, reviewers_per_item: 1 },
         metadata = {},
         dataset_id    = null,
+        label_ids     = [],
         annotator_ids = [],
         reviewer_ids  = [],
       } = req.body;
 
       const annotators = [...new Set(annotator_ids)];
       const reviewers  = [...new Set(reviewer_ids)];
+      const labels     = [...new Set(label_ids)];
 
       // ── STEP 1: insert project ──
       const { data: project, error } = await supabaseAdmin
@@ -300,7 +266,7 @@ router.post(
           export_format, review_policy, metadata,
           status:        'draft',
         })
-        .select(PROJECT_SELECT)
+        .select('id, name')
         .single();
       if (error) throw error;
 
@@ -317,11 +283,28 @@ router.post(
         }
       }
 
+      // ── STEP 2.5: insert project_labels ──
+      if (labels.length > 0) {
+        const labelRows = labels.map(uid => ({ project_id: project.id, label_id: uid }));
+        const { error: lbErr } = await supabaseAdmin.from('project_labels').insert(labelRows);
+        if (lbErr) {
+          await supabaseAdmin.from('projects').delete().eq('id', project.id);
+          throw lbErr;
+        }
+      }
+
+      // ── RE-SELECT Full project to ensure relations exist ──
+      const { data: fullProject } = await supabaseAdmin
+        .from('projects')
+        .select(PROJECT_SELECT)
+        .eq('id', project.id)
+        .single();
+
       // ── STEP 3: auto-distribute tasks if dataset_id + annotators provided ──
       let taskStats = { created: 0 };
       if (dataset_id && annotators.length > 0) {
         taskStats = await autoDistributeTasks({
-          project,
+          project: fullProject,
           dataset_id,
           annotators,
           reviewers,
@@ -336,7 +319,7 @@ router.post(
         metadata: { name, dataset_id, tasks: taskStats.created }, req,
       });
 
-      res.status(201).json(shapeProject({ ...project, tasks_created: taskStats.created }));
+      res.status(201).json(shapeProject({ ...fullProject, tasks_created: taskStats.created }));
     } catch (err) {
       console.error('[POST /projects]', err);
       res.status(500).json({ message: 'Failed to create project.', error: err.message });

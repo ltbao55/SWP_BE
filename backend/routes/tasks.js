@@ -16,12 +16,11 @@ const router = express.Router();
 const TASK_SELECT = `
   id, status, annotation_data, review_comments, error_category,
   review_notes, review_issues, submitted_at, reviewed_at, created_at, updated_at,
-  project:projects!project_id(id, name, guidelines, deadline, review_policy, dataset_id),
+  project:projects!project_id(id, name, guidelines, deadline, review_policy, dataset_id, project_labels(label:labels(*))),
   dataset:datasets!dataset_id(id, name),
-  data_item:data_items!data_item_id(id, filename, original_name, storage_path, storage_url, mime_type, dataset_id, subtopic_id),
+  data_item:data_items!data_item_id(id, filename, original_name, storage_path, storage_url, mime_type, dataset_id),
   annotator:profiles!annotator_id(id, username, full_name),
-  reviewer:profiles!reviewer_id(id, username, full_name),
-  label_set:label_sets!label_set_id(id, name, labels(*))
+  reviewer:profiles!reviewer_id(id, username, full_name)
 `;
 
 // GET /api/tasks/my-tasks
@@ -175,12 +174,12 @@ router.get('/:id', auth, async (req, res) => {
   }
 });
 
-// POST /api/tasks/assign — Manager assigns data items to annotator
+// POST /api/tasks/assign — Manager assigns items by auto splitting among annotators
 /**
  * @swagger
  * /api/tasks/assign:
  *   post:
- *     summary: Batch assign data items to an annotator (manager / admin)
+ *     summary: Auto-split unassigned data items from a dataset evenly across annotators (manager / admin)
  *     tags: [Tasks]
  *     security:
  *       - bearerAuth: []
@@ -190,7 +189,7 @@ router.get('/:id', auth, async (req, res) => {
  *         application/json:
  *           schema:
  *             type: object
- *             required: [project_id, dataset_id, annotator_id, data_item_ids]
+ *             required: [project_id, dataset_id, annotator_ids]
  *             properties:
  *               project_id:
  *                 type: string
@@ -198,64 +197,84 @@ router.get('/:id', auth, async (req, res) => {
  *               dataset_id:
  *                 type: string
  *                 format: uuid
- *               annotator_id:
- *                 type: string
- *                 format: uuid
- *               data_item_ids:
+ *               annotator_ids:
  *                 type: array
  *                 items: { type: string, format: uuid }
  *               reviewer_ids:
  *                 type: array
  *                 items: { type: string, format: uuid }
  *                 description: Optional list of reviewers for multi-reviewer consensus
- *               label_set_id:
- *                 type: string
- *                 format: uuid
- *                 nullable: true
  *     responses:
  *       201:
- *         description: Tasks created and assigned
+ *         description: Tasks auto-split and assigned
  *       400:
- *         description: Invalid annotator
+ *         description: No annotators provided or invalid annotator
  *       404:
  *         description: Project not found
  */
-router.post('/assign', auth, authorize('manager', 'admin'), taskAssignValidators, handleValidationErrors, async (req, res) => {
+router.post('/assign', auth, authorize('manager', 'admin'), async (req, res) => {
   try {
-    const { project_id, dataset_id, annotator_id, data_item_ids, reviewer_ids = [], label_set_id = null } = req.body;
+    const { project_id, dataset_id, annotator_ids = [], reviewer_ids = [] } = req.body;
+
+    if (!annotator_ids || annotator_ids.length === 0) {
+      return res.status(400).json({ message: 'Must provide at least one annotator_id.' });
+    }
 
     const { data: project } = await supabaseAdmin.from('projects').select('id, manager_id').eq('id', project_id).single();
     if (!project) return res.status(404).json({ message: 'Project not found.' });
     if (req.user.role === 'manager' && project.manager_id !== req.user.id)
       return res.status(403).json({ message: 'You can only assign tasks in your own projects.' });
 
-    const { data: annotator } = await supabaseAdmin.from('profiles').select('id, role, is_active').eq('id', annotator_id).single();
-    if (!annotator || annotator.role !== 'annotator' || !annotator.is_active)
-      return res.status(400).json({ message: 'Invalid or inactive annotator.' });
+    // Validate annotators
+    const { data: validAnnotators } = await supabaseAdmin
+      .from('profiles').select('id')
+      .in('id', annotator_ids).eq('role', 'annotator').eq('is_active', true);
+    if (!validAnnotators || validAnnotators.length !== annotator_ids.length) {
+      return res.status(400).json({ message: 'One or more invalid or inactive annotators provided.' });
+    }
 
-    const taskInserts = data_item_ids.map((itemId) => ({
-      project_id, dataset_id, data_item_id: itemId, annotator_id,
-      label_set_id: label_set_id || null, status: 'assigned',
+    // Find all items in this dataset that do not have a task for this project
+    const { data: existingTasks } = await supabaseAdmin.from('tasks').select('data_item_id').eq('project_id', project_id);
+    const assignedItemIds = new Set((existingTasks || []).map(t => t.data_item_id));
+
+    const { data: allItems } = await supabaseAdmin.from('data_items').select('id').eq('dataset_id', dataset_id);
+    const unassignedItems = (allItems || []).filter(item => !assignedItemIds.has(item.id));
+
+    if (unassignedItems.length === 0) {
+      return res.status(400).json({ message: 'No unassigned items left in this dataset for this project.' });
+    }
+
+    const annotators = validAnnotators.map(a => a.id);
+    const reviewers = reviewer_ids || [];
+
+    // Round-robin distribution
+    const taskInserts = unassignedItems.map((item, i) => ({
+      project_id, dataset_id, data_item_id: item.id,
+      annotator_id: annotators[i % annotators.length],
+      status: 'assigned',
     }));
 
     const { data: tasks, error: taskError } = await supabaseAdmin.from('tasks').insert(taskInserts).select('id, data_item_id, status');
     if (taskError) throw taskError;
 
-    if (reviewer_ids.length > 0) {
+    if (reviewers.length > 0) {
       const reviewerInserts = [];
-      tasks.forEach((task) => reviewer_ids.forEach((rId) => reviewerInserts.push({ task_id: task.id, reviewer_id: rId, status: 'pending' })));
+      tasks.forEach((task, i) => reviewerInserts.push({ task_id: task.id, reviewer_id: reviewers[i % reviewers.length], status: 'pending' }));
       await supabaseAdmin.from('task_reviewers').insert(reviewerInserts);
-      await supabaseAdmin.from('tasks').update({ reviewer_id: reviewer_ids[0] }).in('id', tasks.map((t) => t.id));
+      await supabaseAdmin.from('tasks').update({ reviewer_id: reviewers[0] }).in('id', tasks.map((t) => t.id));
     }
 
-    await supabaseAdmin.from('data_items').update({ status: 'assigned' }).in('id', data_item_ids);
+    const dataItemIds = tasks.map(t => t.data_item_id);
+    await supabaseAdmin.from('data_items').update({ status: 'assigned' }).in('id', dataItemIds);
+    
+    // Update total tasks in project
     const { count: taskCount } = await supabaseAdmin.from('tasks').select('id', { count: 'exact', head: true }).eq('project_id', project_id);
     await supabaseAdmin.from('projects').update({ total_tasks: taskCount, status: 'active' }).eq('id', project_id);
 
     await logActivity({ userId: req.user.id, action: 'task_assign', resourceType: 'task',
-      description: `${tasks.length} task(s) assigned to annotator`, metadata: { project_id, annotator_id, count: tasks.length }, req });
+      description: `${tasks.length} task(s) evenly distributed among ${annotators.length} annotator(s)`, metadata: { project_id, count: tasks.length }, req });
 
-    res.status(201).json({ message: `${tasks.length} task(s) assigned successfully.`, tasks });
+    res.status(201).json({ message: `${tasks.length} task(s) auto-assigned successfully.`, tasks });
   } catch (err) {
     console.error('[POST /tasks/assign]', err);
     res.status(500).json({ message: 'Failed to assign tasks.', error: err.message });
@@ -530,7 +549,9 @@ router.post('/:id/ai-assist', auth, authorize('annotator'), async (req, res) => 
       .select(`
         id, status, annotator_id,
         data_item:data_items!data_item_id(id, storage_path, storage_url, mime_type),
-        label_set:label_sets!label_set_id(id, name, labels(id, name, description))
+        project:projects!project_id(
+          project_labels(label:labels(id, name, description))
+        )
       `)
       .eq('id', req.params.id)
       .single();
@@ -544,8 +565,9 @@ router.post('/:id/ai-assist', auth, authorize('annotator'), async (req, res) => 
     if (!mime.startsWith('image/')) {
       return res.status(400).json({ message: `AI Assist only supports image tasks. Got: ${mime}` });
     }
-    if (!task.label_set?.labels?.length) {
-      return res.status(400).json({ message: 'Task has no label set — cannot determine what to detect.' });
+    const projectLabels = (task.project?.project_labels || []).map(pl => pl.label).filter(Boolean);
+    if (projectLabels.length === 0) {
+      return res.status(400).json({ message: 'Project has no labels — cannot determine what to detect.' });
     }
 
     // ── STEP 3: Get image URL (prefer signed URL for private storage) ──
@@ -561,7 +583,7 @@ router.post('/:id/ai-assist', auth, authorize('annotator'), async (req, res) => 
     // ── STEP 4: Call AI service (Mock or Gemini) ──────────────
     const rawBboxes = await getAIPredictions({
       imageUrl,
-      labels:    task.label_set.labels,
+      labels:    projectLabels,
       imageSize: { width: image_width, height: image_height },
     });
 

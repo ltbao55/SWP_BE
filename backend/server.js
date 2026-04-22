@@ -67,9 +67,7 @@ app.use('/api/reviews',       require('./routes/reviews'));
 app.use('/api/activity-logs', require('./routes/activityLogs'));
 app.use('/api/settings',      require('./routes/settings'));
 app.use('/api/ai',            require('./routes/ai'));
-app.use('/api/topics',        require('./routes/topics'));
-app.use('/api/subtopics',     require('./routes/subtopics'));
-app.use('/api/labelsets',     require('./routes/labelsets'));
+app.use('/api/labels',        require('./routes/labels'));
 
 // ── System Health ─────────────────────────────────────────────
 /**
