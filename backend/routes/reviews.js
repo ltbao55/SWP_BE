@@ -70,6 +70,8 @@ router.get('/pending', auth, authorize('reviewer', 'admin'), async (req, res) =>
       .order('submitted_at', { ascending: true });
 
     if (project_id) query = query.eq('project_id', project_id);
+
+    // If reviewer, they can see unassigned tasks or tasks assigned to them explicitly
     if (req.user.role === 'reviewer') {
       query = query.or(`reviewer_id.is.null,reviewer_id.eq.${req.user.id}`);
     }
