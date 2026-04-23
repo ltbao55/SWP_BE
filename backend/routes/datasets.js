@@ -307,6 +307,75 @@ router.post('/', auth, authorize('manager', 'admin'), datasetValidators, handleV
   }
 });
 
+// ── PUT /api/datasets/:id ────────────────────────────────────
+/**
+ * @swagger
+ * /api/datasets/{id}:
+ *   put:
+ *     summary: Update dataset details (manager / admin)
+ *     tags: [Datasets]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name: { type: string }
+ *               description: { type: string }
+ *               metadata: { type: object }
+ *     responses:
+ *       200:
+ *         description: Dataset updated
+ *       403:
+ *         description: Not your dataset
+ *       404:
+ *         description: Dataset not found
+ */
+router.put('/:id', auth, authorize('manager', 'admin'), async (req, res) => {
+  try {
+    const { name, description, metadata } = req.body;
+    
+    // Check ownership
+    const { data: dataset } = await supabaseAdmin.from('datasets').select('id, manager_id').eq('id', req.params.id).single();
+    if (!dataset) return res.status(404).json({ message: 'Dataset not found.' });
+    if (req.user.role === 'manager' && dataset.manager_id !== req.user.id)
+      return res.status(403).json({ message: 'You can only update your own datasets.' });
+
+    const updates = {};
+    if (name !== undefined)        updates.name = name;
+    if (description !== undefined) updates.description = description;
+    if (metadata !== undefined)    updates.metadata = metadata;
+    updates.updated_at = new Date().toISOString();
+
+    const { data: updated, error } = await supabaseAdmin
+      .from('datasets')
+      .update(updates)
+      .eq('id', req.params.id)
+      .select(DATASET_SELECT)
+      .single();
+
+    if (error) throw error;
+
+    await logActivity({
+      userId: req.user.id, action: 'dataset_update', resourceType: 'dataset',
+      resourceId: req.params.id, description: `Dataset "${updated.name}" updated`, req
+    });
+
+    res.json(shapeDataset(updated));
+  } catch (err) {
+    console.error('[PUT /datasets/:id]', err);
+    res.status(500).json({ message: 'Failed to update dataset.', error: err.message });
+  }
+});
+
 // ── POST /api/datasets/:id/upload ───────────────────────────
 /**
  * @swagger
@@ -501,6 +570,70 @@ router.delete('/:id', auth, authorize('manager', 'admin'), async (req, res) => {
   } catch (err) {
     console.error('[DELETE /datasets/:id]', err);
     res.status(500).json({ message: 'Failed to delete dataset.', error: err.message });
+  }
+});
+
+// ── DELETE /api/datasets/:id/items/:itemId ───────────────────
+/**
+ * @swagger
+ * /api/datasets/{id}/items/{itemId}:
+ *   delete:
+ *     summary: Delete a specific item from a dataset (manager / admin)
+ *     tags: [Datasets]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *       - in: path
+ *         name: itemId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Item deleted
+ *       403:
+ *         description: Not your dataset
+ *       404:
+ *         description: Dataset or Item not found
+ */
+router.delete('/:id/items/:itemId', auth, authorize('manager', 'admin'), async (req, res) => {
+  try {
+    // 1. Check dataset ownership
+    const { data: dataset } = await supabaseAdmin.from('datasets').select('id, manager_id').eq('id', req.params.id).single();
+    if (!dataset) return res.status(404).json({ message: 'Dataset not found.' });
+    if (req.user.role === 'manager' && dataset.manager_id !== req.user.id)
+      return res.status(403).json({ message: 'You can only manage your own datasets.' });
+
+    // 2. Get item info
+    const { data: item } = await supabaseAdmin.from('data_items').select('id, storage_path, dataset_id').eq('id', req.params.itemId).single();
+    if (!item || item.dataset_id !== req.params.id) return res.status(404).json({ message: 'Item not found in this dataset.' });
+
+    // 3. Delete from Storage
+    if (item.storage_path) {
+      await supabaseAdmin.storage.from(BUCKET).remove([item.storage_path]);
+    }
+
+    // 4. Delete from DB
+    const { error: delErr } = await supabaseAdmin.from('data_items').delete().eq('id', item.id);
+    if (delErr) throw delErr;
+
+    // 5. Update dataset total_items count
+    const { count: itemCount } = await supabaseAdmin
+      .from('data_items').select('id', { count: 'exact', head: true }).eq('dataset_id', dataset.id);
+    await supabaseAdmin.from('datasets').update({ total_items: itemCount || 0 }).eq('id', dataset.id);
+
+    await logActivity({
+      userId: req.user.id, action: 'dataset_item_delete', resourceType: 'dataset',
+      resourceId: req.params.id, description: `Deleted item ${req.params.itemId} from dataset`, req
+    });
+
+    res.json({ message: 'Item deleted successfully.', total_items: itemCount || 0 });
+  } catch (err) {
+    console.error('[DELETE /datasets/:id/items/:itemId]', err);
+    res.status(500).json({ message: 'Failed to delete item.', error: err.message });
   }
 });
 

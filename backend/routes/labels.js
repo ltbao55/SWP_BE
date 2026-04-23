@@ -30,6 +30,8 @@ router.get('/', auth, authorize('manager', 'admin', 'reviewer'), async (req, res
 router.post('/', auth, authorize('manager', 'admin'), async (req, res) => {
   try {
     const { name, color, description } = req.body;
+    console.log('[POST /labels] Attempting to create label:', { name, color, description, userId: req.user.id });
+
     if (!name) return res.status(400).json({ message: 'Label name is required.' });
 
     const { data, error } = await supabaseAdmin
@@ -39,10 +41,16 @@ router.post('/', auth, authorize('manager', 'admin'), async (req, res) => {
       .single();
 
     if (error) {
+      console.error('[POST /labels] Supabase error:', error);
       if (error.code === '23505') { // unique constraint
         return res.status(400).json({ message: `Label with name '${name}' already exists.` });
       }
-      throw error;
+      return res.status(500).json({ message: 'Database failure during label creation.', error: error.message, details: error.details });
+    }
+
+    if (!data) {
+       console.warn('[POST /labels] No data returned from insert (silent failure).');
+       return res.status(500).json({ message: 'Label creation failed silently (no data returned).' });
     }
 
     await logActivity({
@@ -52,8 +60,8 @@ router.post('/', auth, authorize('manager', 'admin'), async (req, res) => {
 
     res.status(201).json(data);
   } catch (err) {
-    console.error('[POST /labels]', err);
-    res.status(500).json({ message: 'Failed to create label.', error: err.message });
+    console.error('[POST /labels] Catch error:', err);
+    res.status(500).json({ message: 'Unexpected failure during label creation.', error: err.message });
   }
 });
 
