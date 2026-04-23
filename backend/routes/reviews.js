@@ -49,22 +49,22 @@ router.get('/pending', auth, authorize('reviewer', 'admin'), async (req, res) =>
 
     // 1. Fetch project policy if project_id is provided
     let sampleRate = 1.0;
-    let isSampleMode = false;
     if (project_id) {
       const { data: project } = await supabaseAdmin
         .from('projects')
         .select('review_policy')
         .eq('id', project_id)
         .single();
-      if (project?.review_policy?.mode === 'sample') {
-        isSampleMode = true;
-        sampleRate = parseFloat(project.review_policy.sample_rate || 1.0);
+      
+      // If project has a sample rate defined, use it
+      if (project?.review_policy?.sample_rate) {
+        sampleRate = parseFloat(project.review_policy.sample_rate);
       }
     }
 
     // 2. Build and execute query
     let data, count;
-    if (isSampleMode && sampleRate < 1.0) {
+    if (sampleRate < 1.0) {
       // Use SQL function for stratified sampling (gets base task rows)
       const { data: sampledTasks, error: rpcErr } = await supabaseAdmin.rpc('get_stratified_tasks', {
         p_project_id:  project_id,
