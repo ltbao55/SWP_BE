@@ -477,7 +477,7 @@ router.post('/batch-submit', auth, authorize('annotator'), async (req, res) => {
             review_comments: null,
             review_notes: [],
             review_issues: [],
-            error_category: 'other'
+            error_category: null  // reset to null on submit; only reviewer sets this on reject
           })
           .eq('id', id).select('id, status, submitted_at').single();
 
@@ -526,7 +526,7 @@ router.post('/:id/submit', auth, authorize('annotator'), async (req, res) => {
         review_comments: null,
         review_notes: [],
         review_issues: [],
-        error_category: 'other'
+        error_category: null  // reset to null on submit; only reviewer sets this on reject
       })
       .eq('id', req.params.id).select('id, status, submitted_at').single();
     if (error) throw error;
