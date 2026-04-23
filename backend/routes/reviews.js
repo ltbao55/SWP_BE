@@ -11,15 +11,16 @@ const { approveValidators, rejectValidators, handleValidationErrors } = require(
 
 const router = express.Router();
 
-// NOTE: project_labels(label:labels(*)) intentionally excluded.
-// That nested join requires project_labels FK → labels to be properly set up in Supabase,
-// and is NOT needed by the reviewer workflow (approve/reject only needs basic project info).
-// Labels for a project can be fetched separately via GET /api/projects/:id if needed.
+// TASK_WITH_PROJECT: Minimal safe select for reviewer workflow.
+// - project_labels(label:labels(*)) excluded: requires FK migrations not guaranteed on all envs.
+// - dataset_id excluded from projects: added by migration_subtopic_ownership.sql, not in base schema.
+// - dataset_id excluded from data_items select in join: not needed for review display.
+// Only columns guaranteed to exist in schema.sql v4 are used here.
 const TASK_WITH_PROJECT = `
   id, status, annotation_data, review_comments, error_category,
   review_notes, review_issues, submitted_at, reviewed_at, created_at, updated_at,
-  project:projects!project_id(id, name, guidelines, deadline, review_policy, dataset_id),
-  data_item:data_items!data_item_id(id, filename, original_name, storage_path, storage_url, mime_type, dataset_id),
+  project:projects!project_id(id, name, guidelines, deadline, review_policy),
+  data_item:data_items!data_item_id(id, filename, original_name, storage_path, storage_url, mime_type),
   annotator:profiles!annotator_id(id, username, full_name),
   reviewer:profiles!reviewer_id(id, username, full_name)
 `;
