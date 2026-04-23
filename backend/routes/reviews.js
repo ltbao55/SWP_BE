@@ -75,34 +75,54 @@ router.get('/pending', auth, authorize('reviewer', 'admin'), async (req, res) =>
       return data || [];
     };
 
-    // ── Helper: fetch stratified sample for a project ──
+    // ── Helper: stratified sample for a project (JS-side, no RPC) ──
+    // ROOT CAUSE FIX: The get_stratified_tasks() Supabase RPC was created when
+    // tasks had 16 columns. After migrations, tasks now has 18 columns → PostgreSQL
+    // error 42804 "Number of returned columns (18) does not match expected column count (16)".
+    // Solution: implement sampling in JS using only id+annotator_id, then fetch full
+    // details with TASK_WITH_PROJECT. This is schema-change-safe.
     const getSampledTasks = async (pid, rate) => {
-      const { data: sampledTasks, error: rpcErr } = await supabaseAdmin.rpc('get_stratified_tasks', {
-        p_project_id:  pid,
-        p_sample_rate: rate,
-        p_limit:       1000,
-        p_offset:      0,
-      });
-      if (rpcErr) { console.error('[RPC get_stratified_tasks]', rpcErr); throw rpcErr; }
-      if (!sampledTasks || sampledTasks.length === 0) return [];
+      // Step 1: get only id + annotator_id to compute stratified selection
+      const { data: candidates, error: candidateErr } = await supabaseAdmin
+        .from('tasks')
+        .select('id, annotator_id')
+        .eq('project_id', pid)
+        .in('status', ['submitted', 'resubmitted']);
 
-      // Fetch full task rows (with joins) for the sampled IDs
-      const ids = sampledTasks.map(t => t.id);
+      if (candidateErr) { console.error('[Stratified Sampling - candidates]', candidateErr); throw candidateErr; }
+      if (!candidates?.length) return [];
+
+      // Step 2: group by annotator_id
+      const byAnnotator = {};
+      for (const t of candidates) {
+        if (!byAnnotator[t.annotator_id]) byAnnotator[t.annotator_id] = [];
+        byAnnotator[t.annotator_id].push(t.id);
+      }
+
+      // Step 3: for each annotator, randomly take ceil(count * rate) task IDs
+      const selectedIds = [];
+      for (const ids of Object.values(byAnnotator)) {
+        const shuffled = [...ids].sort(() => Math.random() - 0.5);
+        const take = Math.ceil(ids.length * rate);
+        selectedIds.push(...shuffled.slice(0, take));
+      }
+
+      if (!selectedIds.length) return [];
+
+      // Step 4: fetch full task details for the selected IDs using safe TASK_WITH_PROJECT
       let q = supabaseAdmin
         .from('tasks')
         .select(TASK_WITH_PROJECT)
-        .in('id', ids)
+        .in('id', selectedIds)
         .order('submitted_at', { ascending: true });
       if (req.user.role === 'reviewer') {
         q = q.or(`reviewer_id.is.null,reviewer_id.eq.${req.user.id}`);
       }
       const { data, error } = await q;
-      if (error) {
-        console.error('[DB Error]', error);
-        throw error;
-      }
+      if (error) { console.error('[Stratified Sampling - fetch]', error); throw error; }
       return data || [];
     };
+
 
     let allTasks = [];
     let samplingMode = 'full';
