@@ -140,10 +140,22 @@ app.use((err, _req, res, _next) => {
 
 // ── Serve React build in production ──────────────────────────
 if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(path.join(__dirname, '../frontend/build')));
-  app.get('*', (_req, res) =>
-    res.sendFile(path.join(__dirname, '../frontend/build', 'index.html'))
-  );
+  const buildPath = path.join(__dirname, '../frontend/build');
+  const indexPath = path.join(buildPath, 'index.html');
+  
+  app.use(express.static(buildPath));
+  
+  app.get('*', (_req, res) => {
+    const fs = require('fs');
+    if (fs.existsSync(indexPath)) {
+      res.sendFile(indexPath);
+    } else {
+      res.status(404).json({ 
+        message: 'Frontend build not found on server.', 
+        hint: 'If this is a backend-only deployment, ensure your API calls use the correct /api prefix.' 
+      });
+    }
+  });
 }
 
 // ============================================================
