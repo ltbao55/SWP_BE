@@ -63,7 +63,10 @@ router.get('/pending', auth, authorize('reviewer', 'admin'), async (req, res) =>
         q = q.or(`reviewer_id.is.null,reviewer_id.eq.${req.user.id}`);
       }
       const { data, error } = await q;
-      if (error) throw error;
+      if (error) {
+        console.error('[DB Error]', error);
+        throw error;
+      }
       return data || [];
     };
 
@@ -89,7 +92,10 @@ router.get('/pending', auth, authorize('reviewer', 'admin'), async (req, res) =>
         q = q.or(`reviewer_id.is.null,reviewer_id.eq.${req.user.id}`);
       }
       const { data, error } = await q;
-      if (error) throw error;
+      if (error) {
+        console.error('[DB Error]', error);
+        throw error;
+      }
       return data || [];
     };
 
