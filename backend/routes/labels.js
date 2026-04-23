@@ -42,9 +42,24 @@ router.post('/', auth, authorize('manager', 'admin'), async (req, res) => {
 
     if (error) {
       console.error('[POST /labels] Supabase error:', error);
+      
+      // Handle schema mismatch errors (e.g., column doesn't exist or constraint failed)
+      if (error.code === '42703') { // undefined_column
+        return res.status(500).json({ 
+          message: 'Database schema mismatch: "manager_id" column is missing from "labels" table. Please run the fix_labels_schema.sql script.',
+          error: error.message 
+        });
+      }
+      if (error.code === '23502') { // not_null_violation
+        return res.status(400).json({ 
+          message: 'Database constraint failed: A required column (possibly label_set_id) is missing. Your database might be on an old schema.',
+          error: error.message 
+        });
+      }
       if (error.code === '23505') { // unique constraint
         return res.status(400).json({ message: `Label with name '${name}' already exists.` });
       }
+      
       return res.status(500).json({ message: 'Database failure during label creation.', error: error.message, details: error.details });
     }
 
