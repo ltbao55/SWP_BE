@@ -46,6 +46,7 @@ router.get('/pending', auth, authorize('reviewer', 'admin'), async (req, res) =>
   try {
     const { project_id, page = 1, limit = 50 } = req.query;
     const offset = (Number(page) - 1) * Number(limit);
+    console.log(`[GET /reviews/pending] User: ${req.user.id}, Role: ${req.user.role}, project_id: ${project_id}, page: ${page}, limit: ${limit}`);
     const validProjectId = (project_id && project_id !== 'undefined' && project_id !== 'null')
       ? project_id : null;
 
@@ -165,8 +166,15 @@ router.get('/pending', auth, authorize('reviewer', 'admin'), async (req, res) =>
 
     res.json({ data: paginatedData, total, sampling: samplingMode });
   } catch (err) {
-    console.error('[GET /reviews/pending]', err);
-    res.status(500).json({ message: 'Failed to fetch pending reviews.', error: err.message });
+    console.error('[GET /reviews/pending] CRITICAL ERROR:', err);
+    // Include more details in the response for easier debugging during development/deployment phase
+    res.status(500).json({ 
+      message: 'Failed to fetch pending reviews.', 
+      error: err.message,
+      code: err.code,
+      details: err.details,
+      hint: err.hint
+    });
   }
 });
 
