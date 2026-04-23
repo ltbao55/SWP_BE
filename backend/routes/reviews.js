@@ -62,57 +62,56 @@ router.get('/pending', auth, authorize('reviewer', 'admin'), async (req, res) =>
       }
     }
 
-    // 2. Build the query
-    let query = supabaseAdmin
-      .from('tasks')
-      .select(TASK_WITH_PROJECT, { count: 'exact' })
-      .in('status', ['submitted', 'resubmitted'])
-      .order('submitted_at', { ascending: true });
-
-    if (project_id) query = query.eq('project_id', project_id);
-
-    // If reviewer, they can see unassigned tasks or tasks assigned to them explicitly
-    if (req.user.role === 'reviewer') {
-      query = query.or(`reviewer_id.is.null,reviewer_id.eq.${req.user.id}`);
-    }
-
-    const { data, error, count } = await query;
-    if (error) throw error;
-
-    let finalData = data || [];
-
-    // 3. Apply Stratified Sampling (by Annotator) if needed
+    // 2. Build and execute query
+    let data, count;
     if (isSampleMode && sampleRate < 1.0) {
-      const groupedByAnnotator = {};
-      finalData.forEach(task => {
-        const aid = task.annotator_id || 'unassigned';
-        if (!groupedByAnnotator[aid]) groupedByAnnotator[aid] = [];
-        groupedByAnnotator[aid].push(task);
+      // Use SQL function for stratified sampling (gets base task rows)
+      const { data: sampledTasks, error: rpcErr } = await supabaseAdmin.rpc('get_stratified_tasks', {
+        p_project_id:  project_id,
+        p_sample_rate: sampleRate,
+        p_limit:       Number(limit),
+        p_offset:      offset
       });
+      if (rpcErr) throw rpcErr;
+      
+      if (!sampledTasks || sampledTasks.length === 0) {
+        data = [];
+        count = 0;
+      } else {
+        const ids = sampledTasks.map(t => t.id);
+        const { data: fullTasks, error: selectErr } = await supabaseAdmin
+          .from('tasks')
+          .select(TASK_WITH_PROJECT)
+          .in('id', ids)
+          .order('submitted_at', { ascending: true });
+        
+        if (selectErr) throw selectErr;
+        data = fullTasks;
+        count = data.length; // Approximate
+      }
+    } else {
+      // Full review or no project filter
+      let query = supabaseAdmin
+        .from('tasks')
+        .select(TASK_WITH_PROJECT, { count: 'exact' })
+        .in('status', ['submitted', 'resubmitted'])
+        .order('submitted_at', { ascending: true })
+        .range(offset, offset + Number(limit) - 1);
 
-      let stratified = [];
-      Object.values(groupedByAnnotator).forEach(tasks => {
-        // Shuffle and pick top N%
-        const shuffled = tasks.sort(() => 0.5 - Math.random());
-        const takeCount = Math.ceil(tasks.length * sampleRate);
-        stratified = stratified.concat(shuffled.slice(0, takeCount));
-      });
-      finalData = stratified;
+      if (project_id) query = query.eq('project_id', project_id);
+      if (req.user.role === 'reviewer') {
+        query = query.or(`reviewer_id.is.null,reviewer_id.eq.${req.user.id}`);
+      }
+
+      const { data: fullData, error, count: totalCount } = await query;
+      if (error) throw error;
+      data  = fullData;
+      count = totalCount;
     }
-
-    // 4. Apply Pagination and Deadline Filter
-    const now = new Date();
-    const actionable = finalData.filter((t) => {
-      const deadline = t.project?.deadline;
-      return !deadline || new Date(deadline) > now;
-    });
-
-    const paginated = actionable.slice(offset, offset + Number(limit));
 
     res.json({ 
-      data: paginated, 
-      total: actionable.length, 
-      raw_count: count,
+      data, 
+      total: count, 
       sampling: isSampleMode ? `stratified_${sampleRate*100}%` : 'full'
     });
   } catch (err) {

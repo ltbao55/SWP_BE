@@ -241,7 +241,7 @@ router.put('/:id', auth, authorize('admin'), async (req, res) => {
       if (!validRoles.includes(role)) return res.status(400).json({ message: `Invalid role. Must be one of: ${validRoles.join(', ')}` });
       updates.role = role;
     }
-    if (is_active !== undefined) updates.is_active = Boolean(is_active);
+    if (is_active !== undefined) updates.is_active = (is_active === true || is_active === 'true');
 
     const { data: updated, error } = await supabaseAdmin.from('profiles')
       .update(updates).eq('id', req.params.id).select(PROFILE_SELECT).single();

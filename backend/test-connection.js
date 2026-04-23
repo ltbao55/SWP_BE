@@ -43,7 +43,7 @@ async function runTests() {
 
   // 2. Check all tables exist
   console.log('\n[2] Table existence...');
-  const tables = ['profiles','projects','datasets','data_items','label_sets','labels','tasks','task_reviewers','activity_logs','system_settings'];
+  const tables = ['profiles','projects','datasets','data_items','labels','project_labels','project_members','tasks','activity_logs','system_settings'];
   for (const table of tables) {
     const { error } = await supabase.from(table).select('*', { count: 'exact', head: true });
     check(`table: ${table}`, !error, error?.message);

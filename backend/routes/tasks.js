@@ -161,7 +161,7 @@ router.get('/:id', auth, async (req, res) => {
   try {
     const { data: task, error } = await supabaseAdmin
       .from('tasks')
-      .select(TASK_SELECT + `, task_reviewers(id, reviewer_id, status, comment, reviewed_at, reviewer:profiles!reviewer_id(id, username, full_name))`)
+      .select(TASK_SELECT)
       .eq('id', req.params.id)
       .single();
     if (error || !task) return res.status(404).json({ message: 'Task not found.' });
@@ -443,12 +443,7 @@ router.post('/:id/submit', auth, authorize('annotator'), async (req, res) => {
       .eq('id', req.params.id).select('id, status, submitted_at').single();
     if (error) throw error;
 
-    if (isResubmission) {
-      await supabaseAdmin.from('task_reviewers')
-        .update({ status: 'pending', comment: null })
-        .eq('task_id', req.params.id);
-    }
-
+    // Task submission logic — status updated to nextStatus, reviewer status handled via tasks.status
     await logActivity({ userId: req.user.id, action: 'task_submit', resourceType: 'task', resourceId: req.params.id,
       description: `Task submitted (${task.status} → ${nextStatus})`, req });
 

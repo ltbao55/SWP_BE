@@ -107,11 +107,11 @@ router.get('/', auth, async (req, res) => {
     if (req.user.role === 'manager') {
       query = query.eq('manager_id', req.user.id);
     } else if (req.user.role === 'annotator') {
-      const { data: taskProjects } = await supabaseAdmin
-        .from('tasks')
+      const { data: memberProjects } = await supabaseAdmin
+        .from('project_members')
         .select('project_id')
-        .eq('annotator_id', req.user.id);
-      const projectIds = [...new Set((taskProjects || []).map((t) => t.project_id))];
+        .eq('user_id', req.user.id);
+      const projectIds = [...new Set((memberProjects || []).map((t) => t.project_id))];
       if (projectIds.length === 0) return res.json({ data: [], total: 0, page: 1, limit });
       query = query.in('id', projectIds);
     }
