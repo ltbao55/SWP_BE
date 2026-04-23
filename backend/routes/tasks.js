@@ -410,7 +410,95 @@ router.put('/:id/save', auth, authorize('annotator'), async (req, res) => {
  *         description: Task submitted for review
  *       400:
  *         description: No annotation data or invalid transition
+ * /api/tasks/batch-submit:
+ *   post:
+ *     summary: Submit multiple tasks for review in a single request
+ *     tags: [Tasks]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [submissions]
+ *             properties:
+ *               submissions:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   required: [id]
+ *                   properties:
+ *                     id: { type: string, format: uuid }
+ *                     annotation_data: { type: object }
+ *     responses:
+ *       200:
+ *         description: All tasks processed
+ *       400:
+ *         description: Invalid input or transitions
  */
+router.post('/batch-submit', auth, authorize('annotator'), async (req, res) => {
+  try {
+    const { submissions } = req.body;
+    if (!Array.isArray(submissions) || submissions.length === 0) {
+      return res.status(400).json({ message: 'No submissions provided.' });
+    }
+
+    const results = [];
+    const errors = [];
+
+    for (const sub of submissions) {
+      const { id, annotation_data } = sub;
+      try {
+        const { data: task } = await supabaseAdmin.from('tasks')
+          .select('id, status, annotator_id, annotation_data, review_comments')
+          .eq('id', id)
+          .single();
+
+        if (!task) throw new Error('Task not found');
+        if (task.annotator_id !== req.user.id) throw new Error('Forbidden');
+
+        const isResubmission = task.status === 'rejected' || task.review_comments !== null;
+        const nextStatus = isResubmission ? 'resubmitted' : getSubmitStatus(task.status);
+        assertTransition(task.status, nextStatus);
+
+        const rawAnnotation = annotation_data ?? task.annotation_data;
+        if (!rawAnnotation || Object.keys(rawAnnotation).length === 0)
+          throw new Error('Missing annotation data');
+
+        const finalAnnotation = groupBboxesByLabel(rawAnnotation);
+
+        const { data: updated, error } = await supabaseAdmin.from('tasks')
+          .update({ 
+            annotation_data: finalAnnotation, 
+            status: nextStatus, 
+            submitted_at: new Date().toISOString(),
+            review_comments: null,
+            review_notes: [],
+            review_issues: [],
+            error_category: 'other'
+          })
+          .eq('id', id).select('id, status, submitted_at').single();
+
+        if (error) throw error;
+
+        await logActivity({ userId: req.user.id, action: 'task_submit', resourceType: 'task', resourceId: id,
+          description: `Task submitted (${task.status} → ${nextStatus})`, req });
+
+        results.push(updated);
+      } catch (err) {
+        errors.push({ id, error: err.message });
+      }
+    }
+
+    res.json({ message: `Processed ${submissions.length} submissions.`, results, errors });
+  } catch (err) {
+    console.error('[POST /tasks/batch-submit]', err);
+    res.status(500).json({ message: 'Batch submit failed.', error: err.message });
+  }
+});
+
 router.post('/:id/submit', auth, authorize('annotator'), async (req, res) => {
   try {
     const { annotation_data } = req.body;
