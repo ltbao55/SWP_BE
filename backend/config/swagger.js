@@ -161,6 +161,7 @@ const options = {
       { name: 'Activity Logs', description: 'Audit trail (admin only)' },
       { name: 'Settings',      description: 'System settings (admin only)' },
       { name: 'AI',            description: 'AI-assisted pre-labeling (Google Gemini)' },
+      { name: 'Labels',        description: 'Master label management' },
       { name: 'Health',        description: 'System health check' },
     ],
   },

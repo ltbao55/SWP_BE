@@ -10,7 +10,23 @@ const { logActivity }     = require('../utils/activityLogger');
 
 const router = express.Router();
 
-// GET /api/labels - List master labels
+/**
+ * @swagger
+ * /api/labels:
+ *   get:
+ *     summary: List master labels
+ *     tags: [Labels]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: List of labels
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items: { $ref: '#/components/schemas/Label' }
+ */
 router.get('/', auth, authorize('manager', 'admin', 'reviewer'), async (req, res) => {
   try {
     const { data: labels, error } = await supabaseAdmin
@@ -26,7 +42,31 @@ router.get('/', auth, authorize('manager', 'admin', 'reviewer'), async (req, res
   }
 });
 
-// POST /api/labels - Create master label
+/**
+ * @swagger
+ * /api/labels:
+ *   post:
+ *     summary: Create a master label (manager / admin)
+ *     tags: [Labels]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [name]
+ *             properties:
+ *               name: { type: string }
+ *               color: { type: string, example: '#3b82f6' }
+ *               description: { type: string }
+ *     responses:
+ *       201:
+ *         description: Label created
+ *       400:
+ *         description: Invalid input or duplicate name
+ */
 router.post('/', auth, authorize('manager', 'admin'), async (req, res) => {
   try {
     const { name, color, description } = req.body;
@@ -80,7 +120,33 @@ router.post('/', auth, authorize('manager', 'admin'), async (req, res) => {
   }
 });
 
-// PUT /api/labels/:id - Update master label
+/**
+ * @swagger
+ * /api/labels/{id}:
+ *   put:
+ *     summary: Update a master label (manager / admin)
+ *     tags: [Labels]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name: { type: string }
+ *               color: { type: string }
+ *               description: { type: string }
+ *     responses:
+ *       200:
+ *         description: Label updated
+ */
 router.put('/:id', auth, authorize('manager', 'admin'), async (req, res) => {
   try {
     const { name, color, description } = req.body;
@@ -107,7 +173,23 @@ router.put('/:id', auth, authorize('manager', 'admin'), async (req, res) => {
   }
 });
 
-// DELETE /api/labels/:id - Delete master label
+/**
+ * @swagger
+ * /api/labels/{id}:
+ *   delete:
+ *     summary: Delete a master label (manager / admin)
+ *     tags: [Labels]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Label deleted
+ */
 router.delete('/:id', auth, authorize('manager', 'admin'), async (req, res) => {
   try {
     const { error } = await supabaseAdmin
