@@ -46,91 +46,130 @@ router.get('/pending', auth, authorize('reviewer', 'admin'), async (req, res) =>
   try {
     const { project_id, page = 1, limit = 50 } = req.query;
     const offset = (Number(page) - 1) * Number(limit);
+    const validProjectId = (project_id && project_id !== 'undefined' && project_id !== 'null')
+      ? project_id : null;
 
-    // 1. Fetch project policy if project_id is provided
-    let sampleRate = 1.0;
-    if (project_id && project_id !== 'undefined' && project_id !== 'null') {
-      const { data: project, error: projErr } = await supabaseAdmin
-        .from('projects')
-        .select('review_policy')
-        .eq('id', project_id)
-        .single();
-      
-      if (projErr) {
-        console.warn(`[GET /reviews/pending] Could not fetch project ${project_id}:`, projErr.message);
-      } else if (project?.review_policy?.sample_rate) {
-        sampleRate = parseFloat(project.review_policy.sample_rate);
+    // ── Helper: fetch full task list for a project (no sampling) ──
+    const getFullTasks = async (pid) => {
+      let q = supabaseAdmin
+        .from('tasks')
+        .select(TASK_WITH_PROJECT)
+        .in('status', ['submitted', 'resubmitted'])
+        .order('submitted_at', { ascending: true });
+      if (pid) q = q.eq('project_id', pid);
+      if (req.user.role === 'reviewer') {
+        q = q.or(`reviewer_id.is.null,reviewer_id.eq.${req.user.id}`);
       }
-    }
+      const { data, error } = await q;
+      if (error) throw error;
+      return data || [];
+    };
 
-    // 2. Build and execute query
-    let data, count;
-    // Only apply sampling if we have a valid project_id AND sampleRate < 1.0
-    if (project_id && project_id !== 'undefined' && project_id !== 'null' && sampleRate < 1.0) {
-      console.log(`[GET /reviews/pending] Applying stratified sampling (rate=${sampleRate}) for project ${project_id}`);
-      // Use SQL function for stratified sampling (gets base task rows)
+    // ── Helper: fetch stratified sample for a project ──
+    const getSampledTasks = async (pid, rate) => {
       const { data: sampledTasks, error: rpcErr } = await supabaseAdmin.rpc('get_stratified_tasks', {
-        p_project_id:  project_id,
-        p_sample_rate: sampleRate,
-        p_limit:       Number(limit),
-        p_offset:      offset
+        p_project_id:  pid,
+        p_sample_rate: rate,
+        p_limit:       1000,
+        p_offset:      0,
       });
-      if (rpcErr) {
-        console.error('[GET /reviews/pending] RPC Error:', rpcErr);
-        throw rpcErr;
+      if (rpcErr) { console.error('[RPC get_stratified_tasks]', rpcErr); throw rpcErr; }
+      if (!sampledTasks || sampledTasks.length === 0) return [];
+
+      // Fetch full task rows (with joins) for the sampled IDs
+      const ids = sampledTasks.map(t => t.id);
+      let q = supabaseAdmin
+        .from('tasks')
+        .select(TASK_WITH_PROJECT)
+        .in('id', ids)
+        .order('submitted_at', { ascending: true });
+      if (req.user.role === 'reviewer') {
+        q = q.or(`reviewer_id.is.null,reviewer_id.eq.${req.user.id}`);
       }
-      
-      if (!sampledTasks || sampledTasks.length === 0) {
-        data = [];
-        count = 0;
+      const { data, error } = await q;
+      if (error) throw error;
+      return data || [];
+    };
+
+    let allTasks = [];
+    let samplingMode = 'full';
+
+    if (validProjectId) {
+      // ── Single project mode ──
+      const { data: project } = await supabaseAdmin
+        .from('projects').select('review_policy').eq('id', validProjectId).single();
+
+      const sampleRate = parseFloat(project?.review_policy?.sample_rate || 1.0);
+      console.log(`[GET /reviews/pending] project=${validProjectId} sampleRate=${sampleRate}`);
+
+      if (sampleRate < 1.0) {
+        allTasks = await getSampledTasks(validProjectId, sampleRate);
+        samplingMode = `stratified_${sampleRate * 100}%`;
       } else {
-        const ids = sampledTasks.map(t => t.id);
-        const { data: fullTasks, error: selectErr } = await supabaseAdmin
-          .from('tasks')
-          .select(TASK_WITH_PROJECT)
-          .in('id', ids)
-          .order('submitted_at', { ascending: true });
-        
-        if (selectErr) throw selectErr;
-        data = fullTasks;
-        count = data.length; // Approximate
+        allTasks = await getFullTasks(validProjectId);
       }
     } else {
-      // Full review or no project filter
-      console.log(`[GET /reviews/pending] Fetching full review queue. Project: ${project_id || 'All'}`);
-      let query = supabaseAdmin
+      // ── All-projects mode: discover projects → apply per-project sampling ──
+      console.log('[GET /reviews/pending] No project_id — discovering projects for reviewer');
+
+      // Step 1: find all distinct project_ids with pending tasks for this reviewer
+      let discoveryQ = supabaseAdmin
         .from('tasks')
-        .select(TASK_WITH_PROJECT, { count: 'exact' })
-        .in('status', ['submitted', 'resubmitted'])
-        .order('submitted_at', { ascending: true })
-        .range(offset, offset + Number(limit) - 1);
-
-      if (project_id && project_id !== 'undefined' && project_id !== 'null') {
-        query = query.eq('project_id', project_id);
-      }
+        .select('project_id')
+        .in('status', ['submitted', 'resubmitted']);
       if (req.user.role === 'reviewer') {
-        query = query.or(`reviewer_id.is.null,reviewer_id.eq.${req.user.id}`);
+        discoveryQ = discoveryQ.or(`reviewer_id.is.null,reviewer_id.eq.${req.user.id}`);
+      }
+      const { data: taskRows, error: discErr } = await discoveryQ;
+      if (discErr) throw discErr;
+
+      const distinctProjectIds = [...new Set((taskRows || []).map(t => t.project_id).filter(Boolean))];
+      console.log('[GET /reviews/pending] Distinct projects:', distinctProjectIds.length);
+
+      if (distinctProjectIds.length === 0) {
+        return res.json({ data: [], total: 0, sampling: 'full' });
       }
 
-      const { data: fullData, error: fullErr, count: totalCount } = await query;
-      if (fullErr) {
-        console.error('[GET /reviews/pending] Query Error:', fullErr);
-        throw fullErr;
+      // Step 2: fetch review_policy for each project
+      const { data: projects, error: projErr } = await supabaseAdmin
+        .from('projects')
+        .select('id, review_policy')
+        .in('id', distinctProjectIds);
+      if (projErr) throw projErr;
+
+      const projectMap = {};
+      (projects || []).forEach(p => { projectMap[p.id] = p; });
+
+      // Step 3: apply sampling per project and combine
+      for (const pid of distinctProjectIds) {
+        const proj = projectMap[pid];
+        const rate = parseFloat(proj?.review_policy?.sample_rate || 1.0);
+
+        if (rate < 1.0) {
+          samplingMode = 'stratified';
+          const sampled = await getSampledTasks(pid, rate);
+          allTasks.push(...sampled);
+        } else {
+          const full = await getFullTasks(pid);
+          allTasks.push(...full);
+        }
       }
-      data  = fullData;
-      count = totalCount;
+
+      // Sort combined results chronologically
+      allTasks.sort((a, b) => new Date(a.submitted_at) - new Date(b.submitted_at));
     }
 
-    res.json({ 
-      data, 
-      total: count, 
-      sampling: sampleRate < 1.0 ? `stratified_${sampleRate * 100}%` : 'full'
-    });
+    // Paginate in-memory
+    const total = allTasks.length;
+    const paginatedData = allTasks.slice(offset, offset + Number(limit));
+
+    res.json({ data: paginatedData, total, sampling: samplingMode });
   } catch (err) {
     console.error('[GET /reviews/pending]', err);
     res.status(500).json({ message: 'Failed to fetch pending reviews.', error: err.message });
   }
 });
+
 
 // ── GET /api/reviews/reviewed ─────────────────────────────────
 /**
