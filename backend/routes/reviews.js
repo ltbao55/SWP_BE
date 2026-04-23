@@ -124,7 +124,7 @@ router.get('/pending', auth, authorize('reviewer', 'admin'), async (req, res) =>
     res.json({ 
       data, 
       total: count, 
-      sampling: isSampleMode ? `stratified_${sampleRate*100}%` : 'full'
+      sampling: sampleRate < 1.0 ? `stratified_${sampleRate * 100}%` : 'full'
     });
   } catch (err) {
     console.error('[GET /reviews/pending]', err);
