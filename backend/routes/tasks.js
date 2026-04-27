@@ -3,7 +3,7 @@
  * Core workflow engine: assigned → in_progress → submitted → approved/rejected → resubmitted
  */
 const express = require('express');
-const { supabaseAdmin }   = require('../config/supabase');
+const { supabaseAdmin, supabaseWithToken }   = require('../config/supabase');
 const { auth, authorize } = require('../middleware/auth');
 const { logActivity }     = require('../utils/activityLogger');
 const { assertTransition, getSubmitStatus } = require('../utils/workflow');
@@ -254,7 +254,7 @@ router.post('/assign', auth, authorize('manager', 'admin'), async (req, res) => 
       status: 'assigned',
     }));
 
-    const { data: tasks, error: taskError } = await supabaseAdmin.from('tasks').insert(taskInserts).select('id, data_item_id, status');
+    const { data: tasks, error: taskError } = await supabaseWithToken(req.token).from('tasks').insert(taskInserts).select('id, data_item_id, status');
     if (taskError) throw taskError;
 
 

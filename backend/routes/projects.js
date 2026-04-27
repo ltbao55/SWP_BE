@@ -4,7 +4,7 @@
  */
 
 const express    = require('express');
-const { supabaseAdmin }          = require('../config/supabase');
+const { supabaseAdmin, supabaseWithToken }          = require('../config/supabase');
 const { auth, authorize }        = require('../middleware/auth');
 const { logActivity }            = require('../utils/activityLogger');
 const { projectValidators, handleValidationErrors } = require('../utils/validators');
@@ -37,7 +37,7 @@ const shapeProject = (project) => {
   };
 };
 
-async function autoDistributeTasks({ project, dataset_id, annotators, reviewer_id }) {
+async function autoDistributeTasks({ project, dataset_id, annotators, reviewer_id, token }) {
   // 1) all data_items in the dataset
   const { data: items } = await supabaseAdmin
     .from('data_items').select('id').eq('dataset_id', dataset_id);
@@ -53,7 +53,7 @@ async function autoDistributeTasks({ project, dataset_id, annotators, reviewer_i
     status:       'assigned',
   }));
 
-  const { data: insertedTasks, error: tErr } = await supabaseAdmin
+  const { data: insertedTasks, error: tErr } = await supabaseWithToken(token)
     .from('tasks').insert(taskRows).select('id');
   if (tErr) throw tErr;
 
@@ -306,6 +306,7 @@ router.post(
           dataset_id,
           annotators,
           reviewer_id: finalReviewerId,
+          token: req.token,
         });
       }
 
