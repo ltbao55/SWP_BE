@@ -48,8 +48,7 @@ router.get('/', auth, authorize('manager', 'admin', 'reviewer'), async (req, res
 
     const { data: labels, error } = await supabaseAdmin
       .from('labels')
-      .select('id, name, color, description, shortcut, sort_order, topic_id, topic:topics!topic_id(id, name, color, description), created_at')
-      .order('sort_order', { ascending: true })
+      .select('id, name, color, description, topic_id, topic:topics!topic_id(id, name, color, description), created_at')
       .order('name',       { ascending: true });
 
     if (error) throw error;
