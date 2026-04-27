@@ -122,7 +122,7 @@ const options = {
           },
         },
 
-        // ── Label ─────────────────────────────────────────────────
+        // ── Label ─────────────────────────────────────────────────────
         Label: {
           type: 'object',
           properties: {
@@ -132,6 +132,24 @@ const options = {
             description: { type: 'string', nullable: true },
             shortcut:    { type: 'string', nullable: true },
             sort_order:  { type: 'integer' },
+            topic_id:    { type: 'string', format: 'uuid', nullable: true },
+            topic:       { $ref: '#/components/schemas/Topic', nullable: true },
+            created_at:  { type: 'string', format: 'date-time' },
+          },
+        },
+
+        // ── Topic ────────────────────────────────────────────────────
+        Topic: {
+          type: 'object',
+          properties: {
+            id:          { type: 'string', format: 'uuid' },
+            name:        { type: 'string', example: 'Animals' },
+            color:       { type: 'string', example: '#10b981' },
+            description: { type: 'string', nullable: true },
+            is_active:   { type: 'boolean' },
+            sort_order:  { type: 'integer' },
+            created_at:  { type: 'string', format: 'date-time' },
+            labels:      { type: 'array', items: { $ref: '#/components/schemas/Label' }, description: 'Only present when with_labels=true' },
           },
         },
 
@@ -162,6 +180,7 @@ const options = {
       { name: 'Settings',      description: 'System settings (admin only)' },
       { name: 'AI',            description: 'AI-assisted pre-labeling (Google Gemini)' },
       { name: 'Labels',        description: 'Master label management' },
+      { name: 'Topics',        description: 'Label topic groups (global grouping for 500+ labels)' },
       { name: 'Health',        description: 'System health check' },
     ],
   },

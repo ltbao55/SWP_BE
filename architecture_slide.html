@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Architecture & Tech Stack — Data Labeling System</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: #f5ede0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .slide {
+      width: 1280px;
+      min-height: 720px;
+      background: #f5ede0;
+      position: relative;
+      padding: 0;
+      overflow: hidden;
+    }
+
+    /* ── Top Nav Bar ── */
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #fff;
+      padding: 8px 32px;
+      border-bottom: 3px solid #f5720a;
+    }
+    .topbar-logo {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .topbar-logo .fpt {
+      color: #f5720a;
+      font-weight: 900;
+      font-size: 20px;
+      letter-spacing: 1px;
+    }
+    .topbar-logo .edu {
+      color: #333;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+    }
+    .topbar-logo-block {
+      display: flex;
+      flex-direction: column;
+      line-height: 1;
+    }
+    .fpt-icon {
+      width: 36px; height: 36px;
+      background: #f5720a;
+      border-radius: 4px;
+      display: flex; align-items: center; justify-content: center;
+      color: white; font-weight: 900; font-size: 14px;
+    }
+
+    .nav-items {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    .nav-item {
+      font-size: 9px;
+      font-weight: 700;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      padding: 4px 8px;
+      border-radius: 2px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .nav-item.active {
+      background: #f5720a;
+      color: white;
+    }
+    .semester { font-size: 10px; font-weight: 700; color: #f5720a; letter-spacing: 1px; }
+
+    /* ── Sub header ── */
+    .subheader {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 4px 32px;
+      background: #f5720a;
+    }
+    .subheader span {
+      color: white;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+    }
+
+    /* ── Section Title ── */
+    .section-title {
+      text-align: center;
+      padding: 18px 0 10px;
+      font-size: 22px;
+      font-weight: 900;
+      color: #222;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+
+    /* ── Architecture Area ── */
+    .arch-area {
+      padding: 0 32px 12px;
+    }
+
+    /* Outer blue wrapper */
+    .arch-outer {
+      background: #2196F3;
+      border-radius: 16px;
+      padding: 20px 20px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    /* Three columns */
+    .arch-cols {
+      display: flex;
+      gap: 16px;
+      align-items: stretch;
+    }
+
+    /* Column boxes */
+    .arch-box {
+      background: #f5720a;
+      border-radius: 12px;
+      padding: 16px;
+      flex: 1;
+    }
+    .arch-box.center {
+      flex: 1.4;
+      background: #1565C0;
+      border: 3px solid rgba(255,255,255,0.3);
+    }
+    .arch-box-title {
+      color: white;
+      font-size: 16px;
+      font-weight: 900;
+      text-align: center;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      margin-bottom: 14px;
+    }
+
+    /* Tech items list */
+    .tech-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .tech-item {
+      background: white;
+      border-radius: 8px;
+      padding: 8px 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .tech-logo {
+      width: 40px; height: 40px;
+      border-radius: 6px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 24px;
+      flex-shrink: 0;
+      overflow: hidden;
+    }
+    .tech-logo img {
+      width: 38px; height: 38px;
+      object-fit: contain;
+    }
+    .tech-name {
+      font-size: 13px;
+      font-weight: 700;
+      color: #222;
+    }
+    .tech-desc {
+      font-size: 10px;
+      color: #666;
+      font-weight: 500;
+    }
+
+    /* Center box bullet list */
+    .center-list {
+      list-style: none;
+      padding: 0;
+    }
+    .center-list li {
+      color: white;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 4px 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .center-list li::before {
+      content: '●';
+      color: #90CAF9;
+      font-size: 10px;
+    }
+
+    /* Arrow between boxes */
+    .arrows-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      flex: 1.4;
+      position: relative;
+    }
+    .arrow {
+      color: #FF6F00;
+      font-size: 28px;
+      font-weight: 900;
+    }
+
+    /* Node logo box */
+    .node-logo-box {
+      background: rgba(255,255,255,0.12);
+      border-radius: 50%;
+      width: 90px; height: 90px;
+      display: flex; align-items: center; justify-content: center;
+      margin: 0 auto 16px;
+    }
+    .node-logo-box img {
+      width: 70px; height: 70px; object-fit: contain;
+    }
+
+    /* ── 3rd Party Services ── */
+    .third-party {
+      margin-top: 4px;
+    }
+    .third-party-title {
+      text-align: center;
+      color: #FF6F00;
+      font-size: 14px;
+      font-weight: 900;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+    .third-party-grid {
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+      flex-wrap: wrap;
+    }
+    .service-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+    }
+    .service-logo {
+      width: 64px; height: 64px;
+      border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 32px;
+      background: white;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+      overflow: hidden;
+    }
+    .service-logo img {
+      width: 52px; height: 52px;
+      object-fit: contain;
+    }
+    .service-name {
+      font-size: 10px;
+      font-weight: 700;
+      color: #444;
+      text-align: center;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    /* Center connector arrow vertical */
+    .connector-down {
+      text-align: center;
+      color: #FF6F00;
+      font-size: 22px;
+      margin: -4px 0;
+    }
+  </style>
+</head>
+<body>
+<div class="slide">
+
+  <!-- TOP NAV BAR -->
+  <div class="topbar">
+    <div class="topbar-logo">
+      <div class="fpt-icon">FPT</div>
+      <div class="topbar-logo-block">
+        <span class="fpt" style="font-size:15px">FPT.</span>
+        <span class="edu">Education</span>
+      </div>
+    </div>
+    <div class="nav-items">
+      <div class="nav-item">1. Context</div>
+      <div class="nav-item">2. Problems</div>
+      <div class="nav-item">3. Solution</div>
+      <div class="nav-item active">4. Architecture &amp; Tech Stack</div>
+      <div class="nav-item">5. Actors &amp; Features</div>
+      <div class="nav-item">6. Demonstration Scenario</div>
+      <div class="nav-item">7. Conclusion</div>
+    </div>
+    <div class="semester">SPRING_2026</div>
+  </div>
+
+  <!-- ORANGE SUBHEADER -->
+  <div class="subheader">
+    <span>FPT University</span>
+    <span>Data Labeling Support System</span>
+  </div>
+
+  <!-- SECTION TITLE -->
+  <div class="section-title">4. Architecture &amp; Tech Stack</div>
+
+  <!-- ARCHITECTURE DIAGRAM -->
+  <div class="arch-area">
+    <div class="arch-outer">
+
+      <!-- THREE COLUMNS -->
+      <div class="arch-cols">
+
+        <!-- FRONT-END -->
+        <div class="arch-box">
+          <div class="arch-box-title">Front-End</div>
+          <div class="tech-list">
+            <div class="tech-item">
+              <div class="tech-logo">
+                <img src="https://upload.wikimedia.org/wikipedia/commons/a/a7/React-icon.svg" alt="React" onerror="this.parentElement.innerHTML='⚛️'" />
+              </div>
+              <div>
+                <div class="tech-name">React</div>
+                <div class="tech-desc">UI Framework</div>
+              </div>
+            </div>
+            <div class="tech-item">
+              <div class="tech-logo" style="background:#646cff;">
+                <img src="https://vitejs.dev/logo.svg" alt="Vite" onerror="this.parentElement.innerHTML='⚡'" />
+              </div>
+              <div>
+                <div class="tech-name">Vite</div>
+                <div class="tech-desc">Build Tool</div>
+              </div>
+            </div>
+            <div class="tech-item">
+              <div class="tech-logo">
+                <img src="https://upload.wikimedia.org/wikipedia/commons/d/d5/Tailwind_CSS_Logo.svg" alt="Tailwind" onerror="this.parentElement.innerHTML='🎨'" />
+              </div>
+              <div>
+                <div class="tech-name">Tailwind CSS</div>
+                <div class="tech-desc">Styling</div>
+              </div>
+            </div>
+            <div class="tech-item">
+              <div class="tech-logo" style="background:#000;">
+                <img src="https://assets.vercel.com/image/upload/v1588805858/repositories/vercel/logo.png" alt="Vercel" onerror="this.parentElement.innerHTML='▲'" />
+              </div>
+              <div>
+                <div class="tech-name">Vercel</div>
+                <div class="tech-desc">Deployment</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- CENTER: BACK-END -->
+        <div class="arch-box center">
+          <div class="arch-box-title" style="color:#90CAF9;">Back-End</div>
+
+          <!-- Node.js logo big -->
+          <div class="node-logo-box">
+            <img src="https://nodejs.org/static/images/logo.svg" alt="Node.js" onerror="this.innerHTML='🟢'" />
+          </div>
+
+          <ul class="center-list">
+            <li>REST API</li>
+            <li>Node.js + Express.js</li>
+            <li>JWT Authentication</li>
+            <li>Swagger UI / OpenAPI</li>
+            <li>Role-Based Access Control</li>
+            <li>CRON Auto-Finalize</li>
+          </ul>
+        </div>
+
+        <!-- DATABASE -->
+        <div class="arch-box">
+          <div class="arch-box-title">Database</div>
+          <div class="tech-list">
+            <div class="tech-item">
+              <div class="tech-logo">
+                <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/3/38/PostgreSQL_elephant.svg/1200px-PostgreSQL_elephant.svg.png" alt="PostgreSQL" onerror="this.parentElement.innerHTML='🐘'" />
+              </div>
+              <div>
+                <div class="tech-name">PostgreSQL</div>
+                <div class="tech-desc">Relational DB</div>
+              </div>
+            </div>
+            <div class="tech-item">
+              <div class="tech-logo">
+                <img src="https://seeklogo.com/images/S/supabase-logo-DCC676FFE2-seeklogo.com.png" alt="Supabase" onerror="this.parentElement.innerHTML='💚'" />
+              </div>
+              <div>
+                <div class="tech-name">Supabase</div>
+                <div class="tech-desc">Cloud + RLS</div>
+              </div>
+            </div>
+            <div class="tech-item">
+              <div class="tech-logo" style="background:#1a1a2e;">
+                <span style="font-size:22px">🗄️</span>
+              </div>
+              <div>
+                <div class="tech-name">Storage Bucket</div>
+                <div class="tech-desc">File Storage</div>
+              </div>
+            </div>
+            <div class="tech-item">
+              <div class="tech-logo" style="background:#2d6a4f;">
+                <span style="font-size:22px">🔐</span>
+              </div>
+              <div>
+                <div class="tech-name">Supabase Auth</div>
+                <div class="tech-desc">JWT / Roles</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- end .arch-cols -->
+
+      <!-- CONNECTOR + 3RD PARTY -->
+      <div class="connector-down">▼</div>
+
+      <!-- 3RD PARTY SERVICES -->
+      <div class="third-party">
+        <div class="third-party-title">3rd Party Services</div>
+        <div class="third-party-grid">
+
+          <div class="service-card">
+            <div class="service-logo">
+              <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/8/8a/Google_Gemini_logo.svg/2560px-Google_Gemini_logo.svg.png" alt="Gemini" onerror="this.parentElement.innerHTML='🤖'" />
+            </div>
+            <div class="service-name">Google Gemini<br>AI Pre-Label</div>
+          </div>
+
+          <div class="service-card">
+            <div class="service-logo">
+              <img src="https://seeklogo.com/images/S/supabase-logo-DCC676FFE2-seeklogo.com.png" alt="Supabase Auth" onerror="this.parentElement.innerHTML='🔑'" />
+            </div>
+            <div class="service-name">Supabase<br>Auth</div>
+          </div>
+
+          <div class="service-card">
+            <div class="service-logo" style="background:#f0f0f0;">
+              <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/3/38/PostgreSQL_elephant.svg/1200px-PostgreSQL_elephant.svg.png" alt="Supabase Storage" onerror="this.parentElement.innerHTML='📦'" />
+            </div>
+            <div class="service-name">Supabase<br>Storage</div>
+          </div>
+
+          <div class="service-card">
+            <div class="service-logo" style="background:#46E3B7;">
+              <img src="https://avatars.githubusercontent.com/u/13612525?s=280&v=4" alt="Render" onerror="this.parentElement.innerHTML='☁️'" />
+            </div>
+            <div class="service-name">Render<br>Hosting</div>
+          </div>
+
+          <div class="service-card">
+            <div class="service-logo" style="background:#fff3e0;">
+              <span style="font-size:32px">⏰</span>
+            </div>
+            <div class="service-name">node-cron<br>Scheduler</div>
+          </div>
+
+          <div class="service-card">
+            <div class="service-logo" style="background:#e8f5e9;">
+              <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/9/9d/Swagger_Logo.png/1200px-Swagger_Logo.png" alt="Swagger" onerror="this.parentElement.innerHTML='📄'" />
+            </div>
+            <div class="service-name">Swagger UI<br>API Docs</div>
+          </div>
+
+        </div>
+      </div>
+
+    </div><!-- end .arch-outer -->
+  </div><!-- end .arch-area -->
+
+</div><!-- end .slide -->
+</body>
+</html>

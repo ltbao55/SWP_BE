@@ -66,6 +66,7 @@ app.use('/api/activity-logs', require('./routes/activityLogs'));
 app.use('/api/settings',      require('./routes/settings'));
 app.use('/api/ai',            require('./routes/ai'));
 app.use('/api/labels',        require('./routes/labels'));
+app.use('/api/topics',        require('./routes/topics'));
 
 // ── System Health ─────────────────────────────────────────────
 /**
