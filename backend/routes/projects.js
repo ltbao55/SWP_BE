@@ -24,9 +24,16 @@ const PROJECT_SELECT = `
 const shapeProject = (project) => {
   if (!project) return project;
   const labels = (project.project_labels || []).map((pl) => pl.label).filter(Boolean);
+  const annotator_ids = (project.members || [])
+    .filter(m => m.role === 'annotator')
+    .map(m => m.user?.id)
+    .filter(Boolean);
+  const reviewer = (project.members || []).find(m => m.role === 'reviewer');
   return {
     ...project,
     labels,
+    annotator_ids,
+    reviewer_id: reviewer?.user?.id || null,
   };
 };
 
@@ -374,6 +381,19 @@ router.put(
       const allowedFields = ['name','description','guidelines','deadline','export_format','review_policy','status','metadata','dataset_id'];
       const updates = {};
       allowedFields.forEach((f) => { if (f in req.body) updates[f] = req.body[f]; });
+
+      // Handle label_ids update if provided
+      if (Array.isArray(req.body.label_ids)) {
+        const labels = [...new Set(req.body.label_ids)];
+        // Delete old labels
+        await supabaseAdmin.from('project_labels').delete().eq('project_id', req.params.id);
+        // Insert new labels
+        if (labels.length > 0) {
+          const labelRows = labels.map(uid => ({ project_id: req.params.id, label_id: uid }));
+          const { error: lbErr } = await supabaseAdmin.from('project_labels').insert(labelRows);
+          if (lbErr) throw lbErr;
+        }
+      }
 
       const { data: project, error } = await supabaseAdmin
         .from('projects')
