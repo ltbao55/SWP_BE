@@ -254,7 +254,7 @@ router.post('/assign', auth, authorize('manager', 'admin'), async (req, res) => 
       status: 'assigned',
     }));
 
-    const { data: tasks, error: taskError } = await supabaseWithToken(req.token).from('tasks').insert(taskInserts).select('id, data_item_id, status');
+    const { data: tasks, error: taskError } = await supabaseAdmin.from('tasks').insert(taskInserts).select('id, data_item_id, status');
     if (taskError) throw taskError;
 
 

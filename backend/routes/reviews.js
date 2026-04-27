@@ -50,9 +50,9 @@ const TASK_WITH_PROJECT = `
  */
 router.get('/pending', auth, authorize('reviewer', 'admin'), async (req, res) => {
   try {
-    const { project_id, page = 1, limit = 50 } = req.query;
+    const { project_id, page = 1, limit = 50, override_sample_rate } = req.query;
     const offset = (Number(page) - 1) * Number(limit);
-    console.log(`[GET /reviews/pending] User: ${req.user.id}, Role: ${req.user.role}, project_id: ${project_id}, page: ${page}, limit: ${limit}`);
+    console.log(`[GET /reviews/pending] User: ${req.user.id}, Role: ${req.user.role}, project_id: ${project_id}, override: ${override_sample_rate}`);
     const validProjectId = (project_id && project_id !== 'undefined' && project_id !== 'null')
       ? project_id : null;
 
@@ -76,11 +76,6 @@ router.get('/pending', auth, authorize('reviewer', 'admin'), async (req, res) =>
     };
 
     // ── Helper: stratified sample for a project (JS-side, no RPC) ──
-    // ROOT CAUSE FIX: The get_stratified_tasks() Supabase RPC was created when
-    // tasks had 16 columns. After migrations, tasks now has 18 columns → PostgreSQL
-    // error 42804 "Number of returned columns (18) does not match expected column count (16)".
-    // Solution: implement sampling in JS using only id+annotator_id, then fetch full
-    // details with TASK_WITH_PROJECT. This is schema-change-safe.
     const getSampledTasks = async (pid, rate) => {
       // Step 1: get only id + annotator_id to compute stratified selection
       const { data: candidates, error: candidateErr } = await supabaseAdmin
@@ -132,12 +127,20 @@ router.get('/pending', auth, authorize('reviewer', 'admin'), async (req, res) =>
       const { data: project } = await supabaseAdmin
         .from('projects').select('review_policy').eq('id', validProjectId).single();
 
-      const sampleRate = parseFloat(project?.review_policy?.sample_rate || 1.0);
-      console.log(`[GET /reviews/pending] project=${validProjectId} sampleRate=${sampleRate}`);
+      let sampleRate = parseFloat(project?.review_policy?.sample_rate || 1.0);
+      
+      // Reviewer can override the sample rate (e.g., increase to 50% or 100%)
+      if (override_sample_rate !== undefined) {
+        const requestedRate = parseFloat(override_sample_rate);
+        if (!isNaN(requestedRate) && requestedRate >= 0 && requestedRate <= 1.0) {
+          console.log(`[GET /reviews/pending] Overriding sample rate: ${sampleRate} -> ${requestedRate}`);
+          sampleRate = requestedRate;
+        }
+      }
 
       if (sampleRate < 1.0) {
         allTasks = await getSampledTasks(validProjectId, sampleRate);
-        samplingMode = `stratified_${sampleRate * 100}%`;
+        samplingMode = `stratified_${(sampleRate * 100).toFixed(0)}%`;
       } else {
         allTasks = await getFullTasks(validProjectId);
       }

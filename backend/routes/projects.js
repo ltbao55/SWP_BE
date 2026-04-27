@@ -37,7 +37,7 @@ const shapeProject = (project) => {
   };
 };
 
-async function autoDistributeTasks({ project, dataset_id, annotators, reviewer_id, token }) {
+async function autoDistributeTasks({ project, dataset_id, annotators, reviewer_id }) {
   // 1) all data_items in the dataset
   const { data: items } = await supabaseAdmin
     .from('data_items').select('id').eq('dataset_id', dataset_id);
@@ -53,7 +53,7 @@ async function autoDistributeTasks({ project, dataset_id, annotators, reviewer_i
     status:       'assigned',
   }));
 
-  const { data: insertedTasks, error: tErr } = await supabaseWithToken(token)
+  const { data: insertedTasks, error: tErr } = await supabaseAdmin
     .from('tasks').insert(taskRows).select('id');
   if (tErr) throw tErr;
 
@@ -253,6 +253,15 @@ router.post(
       const annotators = [...new Set(annotator_ids)];
       const labels     = [...new Set(label_ids)];
 
+      // ── STEP 0: Check if dataset is already in use ──
+      if (dataset_id) {
+        const { data: existingDataset } = await supabaseAdmin
+          .from('projects').select('id').eq('dataset_id', dataset_id).limit(1);
+        if (existingDataset && existingDataset.length > 0) {
+          return res.status(400).json({ message: 'This dataset is already assigned to another project.' });
+        }
+      }
+
       // ── STEP 1: insert project ──
       const { data: project, error } = await supabaseAdmin
         .from('projects')
@@ -306,7 +315,6 @@ router.post(
           dataset_id,
           annotators,
           reviewer_id: finalReviewerId,
-          token: req.token,
         });
       }
 
@@ -382,6 +390,15 @@ router.put(
       const allowedFields = ['name','description','guidelines','deadline','export_format','review_policy','status','metadata','dataset_id'];
       const updates = {};
       allowedFields.forEach((f) => { if (f in req.body) updates[f] = req.body[f]; });
+
+      // Check if updating dataset_id to one that is already in use
+      if (updates.dataset_id) {
+        const { data: existingDataset } = await supabaseAdmin
+          .from('projects').select('id').eq('dataset_id', updates.dataset_id).neq('id', req.params.id).limit(1);
+        if (existingDataset && existingDataset.length > 0) {
+          return res.status(400).json({ message: 'This dataset is already assigned to another project.' });
+        }
+      }
 
       // Handle label_ids update if provided
       if (Array.isArray(req.body.label_ids)) {
@@ -534,43 +551,89 @@ router.post('/:id/approve', auth, authorize('reviewer', 'admin'), async (req, re
   try {
     const { comment = '' } = req.body;
 
+    // 1. Fetch project policy and stats
+    const { data: projectData } = await supabaseAdmin
+      .from('projects').select('name, status, review_policy, total_tasks').eq('id', req.params.id).single();
+    if (!projectData) return res.status(404).json({ message: 'Project not found.' });
+
     const { data: stats } = await supabaseAdmin
       .from('project_task_stats').select('*').eq('project_id', req.params.id).maybeSingle();
 
-    const approvalRate = parseFloat(stats?.approval_rate || 0);
+    const sampleRate = parseFloat(projectData?.review_policy?.sample_rate || 1.0);
+    const totalTasks = parseInt(projectData?.total_tasks || 0, 10);
+    const approvedCount = parseInt(stats?.approved_tasks || 0, 10);
+    const rejectedCount = parseInt(stats?.rejected_tasks || 0, 10);
+    const reviewedCount = approvedCount + rejectedCount;
 
-    if (approvalRate < 70) {
+    // 2. Calculate metrics based on sampling
+    const accuracy = reviewedCount > 0 ? (approvedCount / reviewedCount) * 100 : 0;
+    const globalApprovalRate = parseFloat(stats?.approval_rate || 0);
+
+    // Decision metric: if sampling is used, we care about the accuracy of the sample
+    const decisionRate = (sampleRate < 1.0) ? accuracy : globalApprovalRate;
+
+    if (decisionRate < 70) {
       return res.status(400).json({
-        message: `Approval rate is ${approvalRate}% — below the 70% threshold.`,
-        approval_rate: approvalRate,
+        message: `Approval rate is ${decisionRate.toFixed(1)}% — below the 70% threshold.`,
+        approval_rate: decisionRate,
+        details: sampleRate < 1.0 ? 'Calculated based on reviewed sample accuracy.' : 'Calculated based on total project tasks.'
       });
     }
 
+    // Optional: for sample review, ensure they actually finished the sample
+    if (sampleRate < 1.0) {
+      const expectedSample = Math.floor(totalTasks * sampleRate);
+      if (reviewedCount < expectedSample) {
+        return res.status(400).json({
+          message: `Incomplete review: You have only reviewed ${reviewedCount}/${expectedSample} tasks required for the ${sampleRate * 100}% sample.`
+        });
+      }
+    }
+
+    // 3. Auto-approve ALL remaining submitted tasks in the project
+    // (In sample review, if the sample is good, we accept the whole batch)
+    await supabaseAdmin
+      .from('tasks')
+      .update({ 
+        status: 'approved', 
+        reviewed_at: new Date().toISOString(), 
+        reviewer_id: req.user.id,
+        review_comments: 'Auto-approved via sample review completion.'
+      })
+      .eq('project_id', req.params.id)
+      .in('status', ['submitted', 'resubmitted']);
+
+    // 4. Update project status to completed
     const projectReview = {
       status: 'approved', reviewed_by: req.user.id,
       reviewed_at: new Date().toISOString(), comment,
-      approval_rate: approvalRate,
-      approved_tasks: stats.approved_tasks,
-      rejected_tasks: stats.rejected_tasks,
-      total_tasks:    stats.total_tasks,
+      approval_rate: decisionRate,
+      sample_rate: sampleRate,
+      approved_tasks: approvedCount,
+      rejected_tasks: rejectedCount,
+      total_tasks:    totalTasks,
     };
 
     const { data: projectList, error } = await supabaseAdmin
       .from('projects')
-      .update({ status: 'completed', project_review: projectReview, reviewed_tasks: parseInt(stats?.total_tasks || 0, 10) })
+      .update({ 
+        status: 'completed', 
+        project_review: projectReview, 
+        reviewed_tasks: totalTasks 
+      })
       .eq('id', req.params.id)
       .select('id, name, status');
 
     if (error) throw error;
-    const project = projectList?.[0] || { id: req.params.id, name: 'Project' };
+    const project = projectList?.[0] || { id: req.params.id, name: projectData.name };
 
     await logActivity({
       userId: req.user.id, action: 'project_approve',
       resourceType: 'project', resourceId: req.params.id,
-      description: `Project "${project.name}" approved (${approvalRate}%)`, req,
+      description: `Project "${project.name}" approved (Accuracy: ${decisionRate.toFixed(1)}%)`, req,
     });
 
-    res.json({ message: 'Project approved.', project, approval_rate: approvalRate });
+    res.json({ message: 'Project approved and finalized.', project, approval_rate: decisionRate });
   } catch (err) {
     console.error('[POST /projects/:id/approve]', err);
     res.status(500).json({ message: 'Failed to approve project.', error: err.message });
